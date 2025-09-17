@@ -58,6 +58,11 @@ class HHO_kernel:
 
     @property 
     def boundary_conditions(self):
+        """
+        Description of the boundary conditions at both ends of the domain.
+        
+        The system of the global problem is automatically adapted when the boundary conditions are changed.
+        """
         return self._boundary_conditions
     
     @boundary_conditions.setter 
@@ -79,12 +84,27 @@ class HHO_kernel:
         return self._transmission_system
 
     def build_transmission_system(self):
+        if self.boundary_conditions[0] == 'D':
+            dirichlet_left = np.zeros(self.nb_face_unknowns)
+            dirichlet_left[0] = 1
+            dirichlet_left = dirichlet_left[np.newaxis]
+            dirichlet_left = sp.coo_array(dirichlet_left)
+        if self.boundary_conditions[1] == 'D':
+            dirichlet_right = np.zeros(self.nb_face_unknowns)
+            dirichlet_right[-1] = 1
+            dirichlet_right = dirichlet_right[np.newaxis]
+            dirichlet_right = sp.coo_array(dirichlet_right)
         match self.boundary_conditions:
             case 'NN':
                 A = sp.block_array([[self.transmission_matrix, self.average.T], [self.average, None]], format='csc')
+            case 'DN':
+                A = sp.block_array([[self.transmission_matrix, dirichlet_left.T], [dirichlet_left, None]], format='csc')
+            case 'ND':
+                A = sp.block_array([[self.transmission_matrix, dirichlet_right.T], [dirichlet_right, None]], format='csc')
+            case 'DD':
+                A = sp.block_array([[self.transmission_matrix, dirichlet_left.T, dirichlet_right.T], [dirichlet_left, None, None], [dirichlet_right, None, None]], format='csc')
             case _:
-                raise ValueError(f"Unsupported boundary conditions [{self.bc}] for global transmission problem.")
-        print("...performing LU...")
+                raise ValueError(f"Unsupported boundary conditions [{self.boundary_conditions}] for global transmission problem.")
         self._transmission_system = sp.linalg.splu(A)
 
     def build_transmission_matrix(self):
@@ -127,7 +147,7 @@ class HHO_kernel:
         self.transmission_rhs[0:-1] = f_half_average 
         self.transmission_rhs[1:] = self.transmission_rhs[1:] + f_half_average
 
-    def solve_transmission(self, f):
+    def solve_transmission(self, f, bc_left = None, bc_right = None, average = None):
         """
         Solve the global transmission problem and store the solution in self.solution_face.
 
@@ -135,10 +155,37 @@ class HHO_kernel:
         ----------
             f : callable
                 Source term of the Poisson equation.
-                Should accept an ndarray and return an ndarray of the same size 
+                Should accept an ndarray and return an ndarray of the same size.
+            bc_left : double
+                Value of the Dirichlet boundary condition on the left.
+            bc_right : double
+                Value of the Dirichlet boundary condition on the right.
+            average : double, optional
+                Average value that is prescribed in the case of Neumann boundary conditions on both sides.
+
+        Raises
+        ------
+            ValueError
+                If the average is prescribed for other boundary conditions than 'NN', 
+                or if the average is not prescribed for boundary conditions 'NN'.
         """
         self.build_transmission_rhs(f)
-        rhs = np.concatenate((self.transmission_rhs, np.array([4])))
+        match self.boundary_conditions:
+            case 'NN':
+                if average is None:
+                    raise ValueError("Neumann system requires specification of the average to be solvable.")
+            case _:
+                if not average is None:
+                     raise ValueError(f"Average of the solution cannot be imposed with boundary conditions [{self.boundary_conditions}]")
+        match self.boundary_conditions:
+            case 'NN':
+                rhs = np.concatenate((self.transmission_rhs, np.array([average])))
+            case 'DN':
+                rhs = np.concatenate((self.transmission_rhs, np.array([bc_left])))
+            case 'ND':
+                rhs = np.concatenate((self.transmission_rhs, np.array([bc_right])))
+            case 'DD':
+                rhs = np.concatenate((self.transmission_rhs, np.array([bc_left, bc_right])))
         sol = self.transmission_system.solve(rhs)
         self.solution_face = sol[0:self.nb_face_unknowns]
 
