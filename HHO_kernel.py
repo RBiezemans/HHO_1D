@@ -19,13 +19,17 @@ class HHO_kernel:
         boundary_conditions : str
             Description of the boundary conditions at both ends of the domain.
             Format 'XX' with X either N (Neumann) or D (Dirichlet), and the left (resp. right) symbol denotes the BC at the left (resp. right).
-            Note that 'NN' requires specification of the average in the solver.
+            Note that for 'NN' the solution is unique up to the average.
+        source : callable
+            Source term for the Poisson equation.
         transmission_matrix : scipy.sparse.spmatrix
-            Matrix associated to the global transmission problem.
+            Matrix associated to the global Neumann problem.
         transmission_average : scipy.sparse.spmatrix
             Row vector representing the average operator in the global transmission problem.
         transmission_average : scipy.sparse.spmatrix
             Matrix for the global problem including boundary conditions through Lagrange multipliers.
+        transmission_rhs : ndarray
+            Discrete right-hand side for the Neumann system associated to the source term.
         solution_face : ndarray
             Solution vector of the transmission problem.
 
@@ -57,6 +61,8 @@ class HHO_kernel:
         self._transmission_matrix = None 
         self._transmission_average = None
         self._transmission_system = None
+        self._source = None
+        self._transmission_rhs = None
         self._boundary_conditions = None
 
     @property 
@@ -152,6 +158,30 @@ class HHO_kernel:
         average = average[np.newaxis]
         # Save in sparse format for compatibilty with sp.block_array
         self._transmission_average = sp.coo_array(average)
+
+    @property 
+    def source(self):
+        """
+        Source term for the Poisson equation.
+
+        Changing the source term ensures the right-hand side of the linear system is recomputed.
+        """
+        assert self._source is not None, "Right-hand side is requiested but has not yet been set."
+        return self._source
+    
+    @source.setter
+    def source(self, f):
+        self._source = f
+        self._transmission_rhs = None 
+
+    @property
+    def transmission_rhs(self):
+        """
+        Discrete right-hand side associated to self.source.
+        """
+        if self._transmission_rhs is None:
+            self._build_transmission_rhs(self.source)
+        return self._transmission_rhs
         
     def _build_transmission_rhs(self, f):
         """
@@ -163,10 +193,15 @@ class HHO_kernel:
                 Source term of the Poisson equation.
                 Should accept an ndarray and return an ndarray of the same size 
         """
-        self.transmission_rhs = np.zeros(self.nb_face_unknowns)
-        f_half_average = 0.5 * self.spacing * f((self.points[0:-1] + self.points[1:])/2.0)
-        self.transmission_rhs[0:-1] = f_half_average 
-        self.transmission_rhs[1:] = self.transmission_rhs[1:] + f_half_average
+        if self.cell_degree == 0:
+            # Compute approximation of the average value of f
+            transmission_rhs = np.zeros(self.nb_face_unknowns)
+            f_half_average = 0.5 * self.spacing * (f(self.points[0:-1]) + f(self.points[1:]))/2.0
+            transmission_rhs[0:-1] = f_half_average 
+            transmission_rhs[1:] = transmission_rhs[1:] + f_half_average
+        else:
+            raise ValueError("Source term can only be discretized for cell degree 0.")
+        self._transmission_rhs = transmission_rhs
 
     def solve_transmission(self, f, bc_left = None, bc_right = None, average = None):
         """
@@ -192,6 +227,7 @@ class HHO_kernel:
             RuntimeWarning
                 If the boundary conditions described by bc_left, bc_right and average do not correspond to self.boundary_conditions settings.
         """
+        self.source = f
         for ibc in range(2):
             bc_check, side = (bc_left, "left") if ibc==0 else (bc_right, "right")
             match self.boundary_conditions[ibc]:
@@ -212,8 +248,6 @@ class HHO_kernel:
             case _:
                 if not average is None:
                      raise ValueError(f"Average of the solution cannot be imposed with boundary conditions [{self.boundary_conditions}]")
-        # Build rhs of the transmission system for homogeneous Neumann
-        self._build_transmission_rhs(f)
         # Add constraints to set boundary conditions/average
         match self.boundary_conditions:
             case 'NN':
