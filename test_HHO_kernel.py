@@ -31,11 +31,11 @@ def test_HHO(solver, f, ddf, bc, **bc_args):
 
 poisson = HHO_kernel(np.linspace(0,1,17))
 
-# Test 1 : f(x) = 1 - x^2
-f = lambda x: -x**2 + 1
-ddf = lambda x: 2
-bc = 'ND'
-test_HHO(poisson, f, ddf, bc, bc_right=0)
+# Test 1 : f(x) = -4*(x^2 - x)
+f = lambda x: -4*(x**2 - x) 
+ddf = lambda x: 8
+bc = 'DD'
+test_HHO(poisson, f, ddf, bc)
 
 # Test 2 : f(x) = 1 - x^3
 f = lambda x: -x**3 + 1
@@ -48,9 +48,3 @@ f = lambda x: 4 + np.cos(np.pi*x)
 ddf = lambda x: np.pi**2 * np.cos(np.pi*x)
 bc = 'NN'
 test_HHO(poisson, f, ddf, bc, average=4)
-
-
-
-
-
-

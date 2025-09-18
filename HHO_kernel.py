@@ -276,10 +276,11 @@ class HHO_kernel:
         match self.boundary_conditions:
             case 'NN':
                 if average is None:
-                    raise ValueError("Neumann system requires specification of the average to be solvable.")
+                    average = 0
+                    warnings.warn("Neumann system requires specification of the average to be solvable. It is set to 0.", RuntimeWarning)
             case _:
                 if not average is None:
-                     raise ValueError(f"Average of the solution cannot be imposed with boundary conditions [{self.boundary_conditions}]")
+                    warnings.warn(f"Average of the solution cannot be imposed with boundary conditions [{self.boundary_conditions}]", RuntimeWarning)
         # Add constraints to set boundary conditions/average
         match self.boundary_conditions:
             case 'NN':
