@@ -15,10 +15,10 @@ poisson = HHO_kernel(np.linspace(0,1,17))
 # poisson.solve_transmission(lambda x: np.pi**2*np.cos(np.pi*x), average=4)
 
 # poisson.boundary_conditions = 'DD'
-# poisson.solve_transmission(lambda x: np.pi**2*np.cos(np.pi*x), bc_left = 1.0, bc_right = -1.0)
+# poisson.solve_transmission(lambda x: np.pi**2*np.cos(np.pi*x), bc_left = 5, bc_right = 3)
 
-poisson.boundary_conditions = 'DD'
-poisson.solve_transmission(lambda x: 2, bc_left=1, bc_right=0)
+poisson.boundary_conditions = 'ND'
+poisson.solve_transmission(lambda x: 2, bc_right=0)
 
 plt.scatter(poisson.points, poisson.solution_face)
 # plt.scatter(poisson.points, np.cos(np.pi*poisson.points)+4)

@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
+import warnings 
 
 class HHO_kernel:
     """
@@ -17,10 +18,8 @@ class HHO_kernel:
             Polynomial degree of the cell unknowns.
         boundary_conditions : str
             Description of the boundary conditions at both ends of the domain.
-            Format 'XX' with X either N or D, and the left (resp. right) symbol denotes the BC at the left (resp. right)
-            'N' -> Neumann 
-            'D' -> Dirichlet
-            Note that 'NN' requires specification of the average in the sovler
+            Format 'XX' with X either N (Neumann) or D (Dirichlet), and the left (resp. right) symbol denotes the BC at the left (resp. right).
+            Note that 'NN' requires specification of the average in the solver.
         transmission_matrix : scipy.sparse.spmatrix
             Matrix associated to the global transmission problem.
         transmission_average : scipy.sparse.spmatrix
@@ -29,6 +28,13 @@ class HHO_kernel:
             Matrix for the global problem including boundary conditions through Lagrange multipliers.
         solution_face : ndarray
             Solution vector of the transmission problem.
+
+    Methods
+    -------
+        solve_transmission(f, bc_left=None, bc_right=None, average=None)
+            Solve the global transmission problem with source term f.
+            Non-homogeneous Dirichlet boundary conditions are set by specifying bc_left, bc_right.
+            In case of pure Neumann conditions, the average of the solution is set by specifying average.
     """
 
     def __init__(self, x, degree=0):
@@ -47,21 +53,18 @@ class HHO_kernel:
         self.nb_face_unknowns = len(self.points)
         self.cell_degree = degree
 
-        # Initialize quantities related to the linear system to None
-        self.transmission_matrix = None 
-        self.transmission_average = None
+        # Initialize quantities related to the linear system to unset state
+        self._transmission_matrix = None 
+        self._transmission_average = None
         self._transmission_system = None
         self._boundary_conditions = None
-
-        self.build_transmission_matrix()
-        self.build_transmission_average()
 
     @property 
     def boundary_conditions(self):
         """
         Description of the boundary conditions at both ends of the domain.
         
-        The system of the global problem is automatically adapted when the boundary conditions are changed.
+        The system of the global problem is recomputed when the boundary conditions are changed.
         """
         return self._boundary_conditions
     
@@ -69,7 +72,7 @@ class HHO_kernel:
     def boundary_conditions(self, bc):
         if self.boundary_conditions != bc:
             self._boundary_conditions = bc
-            self.build_transmission_system()
+            self._transmission_system = None
 
     @property 
     def transmission_system(self):
@@ -80,10 +83,16 @@ class HHO_kernel:
         It is automatically recomputed when the boundary conditions are modified.
         """
         if self._transmission_system is None:
-            self.build_transmission_system()
+            self._build_transmission_system()
         return self._transmission_system
 
-    def build_transmission_system(self):
+    def _build_transmission_system(self):
+        """
+        Assemble the linear system for the transmission matrix.
+        
+        The matrix of the homogeneous Neumann problem is precomputed (self.transmission_matrix).
+        Dirichlet boundary conditions/average condition are set with Lagrange multipliers.
+        """
         if self.boundary_conditions[0] == 'D':
             dirichlet_left = np.zeros(self.nb_face_unknowns)
             dirichlet_left[0] = 1
@@ -96,7 +105,7 @@ class HHO_kernel:
             dirichlet_right = sp.coo_array(dirichlet_right)
         match self.boundary_conditions:
             case 'NN':
-                A = sp.block_array([[self.transmission_matrix, self.average.T], [self.average, None]], format='csc')
+                A = sp.block_array([[self.transmission_matrix, self.transmission_average.T], [self.transmission_average, None]], format='csc')
             case 'DN':
                 A = sp.block_array([[self.transmission_matrix, dirichlet_left.T], [dirichlet_left, None]], format='csc')
             case 'ND':
@@ -107,7 +116,13 @@ class HHO_kernel:
                 raise ValueError(f"Unsupported boundary conditions [{self.boundary_conditions}] for global transmission problem.")
         self._transmission_system = sp.linalg.splu(A)
 
-    def build_transmission_matrix(self):
+    @property
+    def transmission_matrix(self):
+        if self._transmission_matrix is None:
+            self._build_transmission_matrix()
+        return self._transmission_matrix
+
+    def _build_transmission_matrix(self):
         """Build discrete linear system of the global transmission problem with Neumann conditions."""
         # Compute the three nonzero diagonals
         upper_diag = -1/self.spacing 
@@ -116,9 +131,15 @@ class HHO_kernel:
         diag[:-1] = 1/self.spacing 
         diag[1:] += 1/self.spacing
         # Save the linear system as a sparse matrix
-        self.transmission_matrix = sp.diags_array([upper_diag, diag, lower_diag], offsets=[+1, 0, -1])
+        self._transmission_matrix = sp.diags_array([upper_diag, diag, lower_diag], offsets=[+1, 0, -1])
 
-    def build_transmission_average(self):
+    @property 
+    def transmission_average(self):
+        if self._transmission_average is None:
+            self._build_transmission_average()
+        return self._transmission_average
+
+    def _build_transmission_average(self):
         """Build row vector corresponding to the discrete average over the conforming P1 space."""
         # Compute vector corresponding to the whole integral
         average = np.zeros(self.nb_face_unknowns)
@@ -130,9 +151,9 @@ class HHO_kernel:
         # Make it a row vector
         average = average[np.newaxis]
         # Save in sparse format for compatibilty with sp.block_array
-        self.average = sp.coo_array(average)
+        self._transmission_average = sp.coo_array(average)
         
-    def build_transmission_rhs(self, f):
+    def _build_transmission_rhs(self, f):
         """
         Build discrete right-hand side associated to the function f.
 
@@ -156,20 +177,34 @@ class HHO_kernel:
             f : callable
                 Source term of the Poisson equation.
                 Should accept an ndarray and return an ndarray of the same size.
-            bc_left : double
+            bc_left : double | None, default=None
                 Value of the Dirichlet boundary condition on the left.
-            bc_right : double
+                Default implements homogeneous condition.
+            bc_right : double | None, default=None
                 Value of the Dirichlet boundary condition on the right.
-            average : double, optional
+                Default implements homogeneous condition.
+            average : double | None, default=None
                 Average value that is prescribed in the case of Neumann boundary conditions on both sides.
+                Default sets average to zero.
 
-        Raises
-        ------
-            ValueError
-                If the average is prescribed for other boundary conditions than 'NN', 
-                or if the average is not prescribed for boundary conditions 'NN'.
+        Warns
+        --------
+            RuntimeWarning
+                If the boundary conditions described by bc_left, bc_right and average do not correspond to self.boundary_conditions settings.
         """
-        self.build_transmission_rhs(f)
+        for ibc in range(2):
+            bc_check, side = (bc_left, "left") if ibc==0 else (bc_right, "right")
+            match self.boundary_conditions[ibc]:
+                case 'D':
+                    if bc_check is None:
+                        if ibc==0:
+                            bc_left = 0
+                        else:
+                            bc_right = 0
+                        warnings.warn(f"No Dirichlet condition is provided at the {side}, homogeneous condition is used.", RuntimeWarning)
+                case 'N':
+                    if bc_check is not None:
+                        warnings.warn(f"Neumann condition at the {side} is specified, but only homogeneous conditions are supported.", RuntimeWarning)
         match self.boundary_conditions:
             case 'NN':
                 if average is None:
@@ -177,16 +212,22 @@ class HHO_kernel:
             case _:
                 if not average is None:
                      raise ValueError(f"Average of the solution cannot be imposed with boundary conditions [{self.boundary_conditions}]")
+        # Build rhs of the transmission system for homogeneous Neumann
+        self._build_transmission_rhs(f)
+        # Add constraints to set boundary conditions/average
         match self.boundary_conditions:
             case 'NN':
-                rhs = np.concatenate((self.transmission_rhs, np.array([average])))
+                constraints = [average]
             case 'DN':
-                rhs = np.concatenate((self.transmission_rhs, np.array([bc_left])))
+                constraints = [bc_left]
             case 'ND':
-                rhs = np.concatenate((self.transmission_rhs, np.array([bc_right])))
+                constraints = [bc_right]
             case 'DD':
-                rhs = np.concatenate((self.transmission_rhs, np.array([bc_left, bc_right])))
+                constraints = [bc_left, bc_right]
+        rhs = np.concatenate((self.transmission_rhs, np.array(constraints)))
+        # Solve
         sol = self.transmission_system.solve(rhs)
+        # 
         self.solution_face = sol[0:self.nb_face_unknowns]
 
 
