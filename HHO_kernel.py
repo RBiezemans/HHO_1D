@@ -14,8 +14,12 @@ class HHO_kernel:
             Spacing[i] = distance between points[i+1] and points[i].
         nb_face_unkowns : int
             Number of face unknowns.
+        nb_cells : int
+            Number of cells of the discrete domain.
         cell_degree : int
             Polynomial degree of the cell unknowns.
+        cells : list of HHO_cell
+            Discretization and solution of all the cell problems.
         boundary_conditions : str
             Description of the boundary conditions at both ends of the domain.
             Format 'XX' with X either N (Neumann) or D (Dirichlet), and the left (resp. right) symbol denotes the BC at the left (resp. right).
@@ -39,11 +43,19 @@ class HHO_kernel:
             Solve the global transmission problem with source term f.
             Non-homogeneous Dirichlet boundary conditions are set by specifying bc_left, bc_right.
             In case of pure Neumann conditions, the average of the solution is set by specifying average.
+        solve_cell_problems()
+            Solve the cell problem on all cells.
+            Requires the prior solution of the transmission problem.
+        solve(f, bc_left=None, bc_right=None, average=None)
+            Solve the transmission problems followed by the cell problems.
+            The same comments as for solve_transmission apply
+        plot(ax)
+            Plot solution at the faces and on the cells on the provided Matplotlib axis.
     """
 
     def __init__(self, x, degree=0):
         """
-        Initialize HHO kernel: build discrete linear system (global and independent local problems).
+        Initialize HHO kernel: define parameters of the grid and the cell degree.
 
         Args:
             x : ndarray
@@ -55,7 +67,12 @@ class HHO_kernel:
         self.spacing = x[1:] - x[0:-1]
 
         self.nb_face_unknowns = len(self.points)
+        self.nb_cells = self.nb_face_unknowns-1
         self.cell_degree = degree
+
+        # Initialize cells problems
+        self.cells = [HHO_cell(self.points[i], self.points[i+1], self.cell_degree) 
+                      for i in range(self.nb_face_unknowns-1)]
 
         # Initialize quantities related to the linear system to unset state
         self._transmission_matrix = None 
@@ -64,6 +81,8 @@ class HHO_kernel:
         self._source = None
         self._transmission_rhs = None
         self._boundary_conditions = None
+        self._solution_face = None
+
 
     @property 
     def boundary_conditions(self):
@@ -202,10 +221,22 @@ class HHO_kernel:
         else:
             raise ValueError("Source term can only be discretized for cell degree 0.")
         self._transmission_rhs = transmission_rhs
+    
+    @property 
+    def solution_face(self):
+        """
+        Solution to the global transmission problem.
+
+        Can only be set through the solve_transmission method.
+        """
+        assert self._solution_face is not None, "Solution to the transmission problem has not yet been computed."
+        return self._solution_face
 
     def solve_transmission(self, f, bc_left = None, bc_right = None, average = None):
         """
-        Solve the global transmission problem and store the solution in self.solution_face.
+        Solve the global transmission problem.
+         
+        Solution is stored in self.solution_face.
 
         Parameters
         ----------
@@ -223,11 +254,12 @@ class HHO_kernel:
                 Default sets average to zero.
 
         Warns
-        --------
+        -----
             RuntimeWarning
                 If the boundary conditions described by bc_left, bc_right and average do not correspond to self.boundary_conditions settings.
         """
         self.source = f
+        self._solution_face = None
         for ibc in range(2):
             bc_check, side = (bc_left, "left") if ibc==0 else (bc_right, "right")
             match self.boundary_conditions[ibc]:
@@ -261,8 +293,191 @@ class HHO_kernel:
         rhs = np.concatenate((self.transmission_rhs, np.array(constraints)))
         # Solve
         sol = self.transmission_system.solve(rhs)
-        # 
-        self.solution_face = sol[0:self.nb_face_unknowns]
+        # Save solution to instance
+        self._solution_face = sol[0:self.nb_face_unknowns]
+    
+    def solve_cell_problems(self):
+        """
+        Solve the local cell problems.
+
+        Requires the prior solution of the global transmission problem.
+        """
+        for i, cell in enumerate(self.cells):
+            cell.solve(self.source, self.solution_face[i], self.solution_face[i+1])
+
+    def solve(self, f, bc_left = None, bc_right = None, average = None):
+        """
+        Solve the global transmission problem followed by the cell problems.
+         
+        The global solution is stored in self.solution_face, the local solutions in the self.cells.
+
+        Parameters
+        ----------
+            f : callable
+                Source term of the Poisson equation.
+                Should accept an ndarray and return an ndarray of the same size.
+            bc_left : double | None, default=None
+                Value of the Dirichlet boundary condition on the left.
+                Default implements homogeneous condition.
+            bc_right : double | None, default=None
+                Value of the Dirichlet boundary condition on the right.
+                Default implements homogeneous condition.
+            average : double | None, default=None
+                Average value that is prescribed in the case of Neumann boundary conditions on both sides.
+                Default sets average to zero.
+
+        Warns
+        -----
+            RuntimeWarning
+                If the boundary conditions described by bc_left, bc_right and average do not correspond to self.boundary_conditions settings.
+        """
+        self.solve_transmission(f, bc_left, bc_right, average)
+        self.solve_cell_problems()
 
 
+    def plot(self, ax):
+        """
+        Plot solution at the faces and on the cells on the provided Matplotlib axis.
+
+        Parameters
+        ----------
+            ax : matplotlib.axes.Axes
+                Axis to draw the plot on.
+        """
+        ax.plot(self.points, 
+                self.solution_face, 
+                'r.', 
+                markersize=10, 
+                markeredgewidth=1, 
+                label="HHO \u2014 faces")
+        for i, cell in enumerate(self.cells):
+            plt_i, = ax.plot(cell.points_plot, 
+                    cell.solution_plot, 
+                    color='#1f77b4', 
+                    linewidth=2)
+            if i == 0:
+                plt_i.set_label("HHO \u2014 cells")
+        ax.set_title(f"Approximation by HHO method (degree {self.cell_degree})")
+        ax.set_xlabel("x")
+        ax.set_ylabel("u(x)")
+        ax.legend()
+
+
+class HHO_cell:    
+    """
+    Handles all information regarding local HHO problems on a single cell.
+
+    Attributes
+    ----------
+        x_left : double
+            Left vertex of the cell.
+        x_right : double
+            Right vertex of the cell.
+        h : double
+            length of the cell.
+        degree : int
+            Polynomial degree of the cell unknowns.
+        solution : ndarray
+            Solution to the local problem on the cell in the polynomial basis, computed by self.solve()
+        plot_margin : ndarray
+            Margin around the faces that is used for visualization of the discontinuous solution.
+        points_plot : ndarray
+            Points in the cell used to plot the cell solution.
+        solution_plot : ndarray
+            Representation of the solution in the cell on points_plot.
+
+    Methods
+    -------
+        solve(source, sol_global_left, sol_global_right))
+            Solve local problem based on the source term and the solution to the global solution on both faces of the cell.
+    """
+
+    def __init__(self, x_left, x_right, degree):
+        """
+        Define parameters for local cell problem.
+
+        Parameters
+        ----------
+            x_left : double
+                Left vertex of the cell.
+            x_right : double
+                Right vertex of the cell.
+            degree : int
+                Polynomial degree of the cell unknowns.
+        """
+        if not x_left < x_right:
+            raise ValueError("Left vertex of cell must be smaller than the right vertex.")
+        self.x_left = x_left 
+        self.x_right = x_right 
+        self.h = x_right - self.x_left
+        self.degree = degree
+
+        self._solution = None
+
+        self.plot_margin = self.h * 1E-5
+        self._points_plot = None
+        self._solution_plot = None
+
+    @property 
+    def solution(self):
+        """
+        Solution to the local problem on the cell in the polynomial basis.
+
+        Can only be set through the solve method.
+        """
+        assert self._solution is not None, "Solution to local problem has not yet been computed."
+        return self._solution
+
+    def solve(self, source, sol_global_left, sol_global_right):
+        """
+        Solve local problem based on the source term and the solution to the global solution on both faces of the cell.
+
+        Solution is saved to self.solution.
+
+        Parameters
+        ----------
+            source : callable
+                Source term of the Poisson equation.
+                Should accept an ndarray and return an ndarray of the same size.
+            sol_global_left : double
+                Solution to the global problem at the left vertex of the cell.
+            sol_global_right : double
+                Solution to the global problem at the right vertex of the cell.
+        """
+        if self.degree == 0:
+            source_average = self.h * (source(self.x_left) + source(self.x_right))/2.0
+            solution = 0.5 * self.h**2 * source_average + 0.5*(sol_global_left + sol_global_right)
+        else:
+            raise ValueError("Local problems have only been implemented for cell degree 0.")
+        self._solution = solution
+        self._solution_plot = None
+
+
+    @property
+    def points_plot(self):
+        """Points in the cell used to plot the cell solution."""
+        if self._points_plot is None:
+            self._build_points_plot()
+        return self._points_plot
+    
+    def _build_points_plot(self):
+        if self.degree == 0:
+            points_plot = np.array([self.x_left+self.plot_margin, self.x_right-self.plot_margin])
+        else:
+            raise ValueError("Plot of cell solutions has only been implemented for cell degree 0.")
+        self._points_plot = points_plot
+
+    @property 
+    def solution_plot(self):
+        """Representation of the solution in the cell on points_plot."""
+        if self._solution_plot is None:
+            self._build_solution_plot()
+        return self._solution_plot
+    
+    def _build_solution_plot(self):
+        if self.degree == 0:
+            solution_plot = self.solution * np.ones(len(self.points_plot))
+        else:
+            raise ValueError("Plot of cell solutions has only been implemented for cell degree 0.")
+        self._solution_plot = solution_plot
     

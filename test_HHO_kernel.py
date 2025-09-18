@@ -3,26 +3,53 @@ import matplotlib.pyplot as plt
 
 from HHO_kernel import HHO_kernel 
 
+def test_HHO(solver, f, ddf, bc, **bc_args):
+    # Solve Poisson equation with HHO
+    solver.boundary_conditions = bc
+    solver.solve(ddf, **bc_args)
+    # Compute max norm error of the transmission problem
+    max_difference = np.max(np.abs(f(solver.points) - solver.solution_face))
+    print(f"Max norm error of HHO at the faces = {max_difference}")
+    # Plot the exact solution and the HHO approximation
+    fig, ax = plt.subplots()
+    xL = np.min(solver.points)
+    xR = np.max(solver.points)
+    xx = np.linspace(xL,xR,101)
+    ax.plot(xx, 
+            f(xx), 
+            'k-', 
+            linewidth=1, 
+            label="Solution")
+    solver.plot(ax)
+    ax.tick_params(direction='in')
+    ax.grid(True, 
+            which='major', 
+            linestyle='--', 
+            linewidth=0.5, 
+            color='lightgrey')
+    plt.show()
 
 poisson = HHO_kernel(np.linspace(0,1,17))
 
-poisson.boundary_conditions = 'NN'
-poisson.solve_transmission(lambda x: np.pi**2*np.cos(np.pi*x), average=4)
-f = lambda x: np.cos(np.pi*x)+4
-max_difference = np.max(np.abs(f(poisson.points) - poisson.solution_face))
-print(f"Max norm difference = {max_difference}")
-plt.scatter(poisson.points, poisson.solution_face)
-plt.scatter(poisson.points, f(poisson.points))
-plt.show()
+# Test 1 : f(x) = 1 - x^2
+f = lambda x: -x**2 + 1
+ddf = lambda x: 2
+bc = 'ND'
+test_HHO(poisson, f, ddf, bc, bc_right=0)
 
-poisson.boundary_conditions = 'ND'
-poisson.solve_transmission(lambda x: 2, bc_right=0)
-plt.scatter(poisson.points, poisson.solution_face)
-f = lambda x: -x*(x-1) - x + 1
-max_difference = np.max(np.abs(f(poisson.points) - poisson.solution_face))
-print(f"Max norm difference = {max_difference}")
-plt.scatter(poisson.points, f(poisson.points))
-plt.show()
+# Test 2 : f(x) = 1 - x^3
+f = lambda x: -x**3 + 1
+ddf = lambda x: 6*x
+bc = 'ND'
+test_HHO(poisson, f, ddf, bc, bc_right=0)
+
+# Test 3 : f(x) = 4 + cos(pi*x)
+f = lambda x: 4 + np.cos(np.pi*x)
+ddf = lambda x: np.pi**2 * np.cos(np.pi*x)
+bc = 'NN'
+test_HHO(poisson, f, ddf, bc, average=4)
+
+
 
 
 
