@@ -338,7 +338,7 @@ class HHO_kernel:
 
     def plot(self, ax):
         """
-        Plot solution at the faces and on the cells on the provided Matplotlib axis.
+        Plot HHO solution/reconstruction on the provided Matplotlib axis.
 
         Parameters
         ----------
@@ -352,12 +352,17 @@ class HHO_kernel:
                 markeredgewidth=1, 
                 label="HHO \u2014 faces")
         for i, cell in enumerate(self.cells):
-            plt_i, = ax.plot(cell.points_plot, 
-                    cell.solution_plot, 
-                    color='#1f77b4', 
-                    linewidth=2)
+            plt_solution, = ax.plot(cell.points_plot, 
+                                    cell.solution_plot, 
+                                    color='#1f77b4', 
+                                    linewidth=2)
+            plt_reconstruction, = ax.plot(cell.points_plot,
+                                          cell.reconstruction_plot,
+                                          color='orange', 
+                                          linewidth=2)
             if i == 0:
-                plt_i.set_label("HHO \u2014 cells")
+                plt_solution.set_label("HHO \u2014 cells")
+                plt_reconstruction.set_label("HHO \u2014 reconstruction")
         ax.set_title(f"Approximation by HHO method (degree {self.cell_degree})")
         ax.set_xlabel("x")
         ax.set_ylabel("u(x)")
@@ -374,18 +379,26 @@ class HHO_cell:
             Left vertex of the cell.
         x_right : double
             Right vertex of the cell.
+        barycenter : double
+            Barycenter of the cell.
         h : double
             length of the cell.
         degree : int
             Polynomial degree of the cell unknowns.
         solution : ndarray
-            Solution to the local problem on the cell in the polynomial basis, computed by self.solve()
+            Solution to the local problem on the cell in the polynomial basis and on the faces, computed by self.solve()
+        solution_faces : ndarray
+            Solution at the faces of the cell.
+            solution_faces[0] is the left face, solution_faces[1] is the right face.
+            Can only be set by self.solve()
         plot_margin : ndarray
             Margin around the faces that is used for visualization of the discontinuous solution.
         points_plot : ndarray
             Points in the cell used to plot the cell solution.
         solution_plot : ndarray
             Representation of the solution in the cell on points_plot.
+        reconstruction_plot : ndarray
+            Representation of the potential reconstruction in the cell on points_plot.
 
     Methods
     -------
@@ -410,24 +423,38 @@ class HHO_cell:
             raise ValueError("Left vertex of cell must be smaller than the right vertex.")
         self.x_left = x_left 
         self.x_right = x_right 
+        self.barycenter = (self.x_left + self.x_right)/2.0
         self.h = x_right - self.x_left
         self.degree = degree
 
         self._solution = None
+        self._solution_faces = None
 
         self.plot_margin = self.h * 1E-5
         self._points_plot = None
         self._solution_plot = None
+        self._reconstruction_plot = None
 
     @property 
     def solution(self):
         """
-        Solution to the local problem on the cell in the polynomial basis.
+        Solution to the local problem on the cell in the polynomial basis and on the faces.
 
         Can only be set through the solve method.
         """
         assert self._solution is not None, "Solution to local problem has not yet been computed."
         return self._solution
+    
+    @property 
+    def solution_faces(self):
+        """
+        Solution at the faces of the cell.
+        
+        solution_faces[0] is the left face, solution_faces[1] is the right face.
+        Can only be set by self.solve()
+        """
+        assert self._solution_faces is not None, "Solution at the cell faces is unknown."
+        return self._solution_faces
 
     def solve(self, source, sol_global_left, sol_global_right):
         """
@@ -445,14 +472,16 @@ class HHO_cell:
             sol_global_right : double
                 Solution to the global problem at the right vertex of the cell.
         """
+        self._solution = np.zeros(self.degree+3)
         if self.degree == 0:
             source_average = self.h * (source(self.x_left) + source(self.x_right))/2.0
             solution = 0.5 * self.h**2 * source_average + 0.5*(sol_global_left + sol_global_right)
         else:
             raise ValueError("Local problems have only been implemented for cell degree 0.")
         self._solution = solution
+        self._solution_faces = np.array([sol_global_left, sol_global_right])
         self._solution_plot = None
-
+        self._reconstruction_plot = None
 
     @property
     def points_plot(self):
@@ -481,4 +510,18 @@ class HHO_cell:
         else:
             raise ValueError("Plot of cell solutions has only been implemented for cell degree 0.")
         self._solution_plot = solution_plot
+    
+    @property
+    def reconstruction_plot(self):
+        """Representation of the potential reconstruction in the cell on points_plot."""
+        if self._reconstruction_plot is None:
+            self._build_reconstruction_plot()
+        return self._reconstruction_plot
+    
+    def _build_reconstruction_plot(self):
+        if self.degree == 0:
+            self._reconstruction_plot = self.solution + (self.solution_faces[1]-self.solution_faces[0])*(self.points_plot-self.barycenter)/self.h
+        else:
+            raise ValueError("Local problems have only been implemented for cell degree 0.")
+        
     
