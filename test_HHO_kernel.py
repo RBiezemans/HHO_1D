@@ -27,6 +27,7 @@ def test_HHO(solver, u, ddu, bc, **bc_args):
             linestyle='--', 
             linewidth=0.5, 
             color='lightgrey')
+    ax.legend()
     plt.show()
 
 poisson = HHO_kernel(np.linspace(0,1,9))

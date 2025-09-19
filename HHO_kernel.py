@@ -326,11 +326,6 @@ class HHO_kernel:
             average : double | None, default=None
                 Average value that is prescribed in the case of Neumann boundary conditions on both sides.
                 Default sets average to zero.
-
-        Warns
-        -----
-            RuntimeWarning
-                If the boundary conditions described by bc_left, bc_right and average do not correspond to self.boundary_conditions settings.
         """
         self.solve_transmission(f, bc_left, bc_right, average)
         self.solve_cell_problems()
@@ -366,7 +361,6 @@ class HHO_kernel:
         ax.set_title(f"Approximation by HHO method (degree {self.cell_degree})")
         ax.set_xlabel("x")
         ax.set_ylabel("u(x)")
-        ax.legend()
 
 
 class HHO_cell:    
@@ -404,6 +398,8 @@ class HHO_cell:
     -------
         solve(source, sol_global_left, sol_global_right))
             Solve local problem based on the source term and the solution to the global solution on both faces of the cell.
+        evaluate_basis(points)
+            Evaluate the basis functions on the cell and their derivatives in prescribed points.
     """
 
     def __init__(self, x_left, x_right, degree):
@@ -524,4 +520,36 @@ class HHO_cell:
         else:
             raise ValueError("Local problems have only been implemented for cell degree 0.")
         
-    
+    def evaluate_basis(self, points):
+        """
+        Evaluate the basis functions on the cell and their derivatives in prescribed points.
+
+        Parameters
+        ----------
+            points : ndarray
+                The points in which the basis is to be evaluated.
+        
+        Returns
+        -------
+        ndarray
+            Values of the basis functions.
+            The array is of the shape (N_points, N_basis): the first axis corresponds to 
+            different evaluation points and the second axis to different basis functions.
+
+        ndarray
+            Values of the gradient, in the same format as the first output.
+            
+        """
+        N_points = len(points)
+        powers = np.arange(0,self.degree+1)
+        # Reshape points and powers to take advantage of numpy broadcasting
+        points = points[:, None]
+        powers = powers[None, :]
+        # Rescale evaluation points to the refernce cell (-1,1)
+        points_scaled = 2*(points-self.barycenter)/self.h
+        # Compute value of the basis functions
+        basis_value = points_scaled ** powers
+        # Compute value of the derivatives
+        gradient_value = np.zeros((N_points,self.degree+1)) # no need to compute the first basis function
+        gradient_value[:,1:] = (points_scaled[:] ** powers[:,:-1]) * (powers[0,1:] * 2/self.h)
+        return basis_value, gradient_value
