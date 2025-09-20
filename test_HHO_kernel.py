@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -30,7 +31,15 @@ def test_HHO(solver, u, ddu, bc, **bc_args):
     ax.legend()
     plt.show()
 
-poisson = HHO_kernel(np.linspace(0,1,9))
+# Define grid for test cases
+xL = 0
+xR = 1
+N_cells = 4
+xx = np.linspace(xL, xR, N_cells+1)
+
+# Build HHO solver for the Poisson equation
+# (the default cell degree used is 0)
+poisson = HHO_kernel(xx)
 
 # Test 0 : u(x) = x
 # The HHO reconstruction equals the exact solution
@@ -39,13 +48,23 @@ ddu = lambda x: 0
 bc = 'DD'
 test_HHO(poisson, u, ddu, bc, bc_left=0, bc_right=1)
 
-
 # Test 1 : u(x) = -4*(x^2 - x)
-# Somewhat surprisingly, the reconstruction in this test case is continuous, but does not coincide with the face solutions at the nodes of the grid.
+# The reconstruction in this test case is continuous, but lies above the solution at the faces.
+# It can be shown that this is always true under three conditions (in 1D):
+# * u is continuous (but this is always the case with a right-hand side in H^-1, implying U in H^1)
+# * the average of ddu is the same on each cell
+# * the cells have equal length
+# cq. test 1b
 u = lambda x: -4*(x**2 - x) 
 ddu = lambda x: 8
 bc = 'DD'
 test_HHO(poisson, u, ddu, bc)
+
+# Test 1b : repeat Test 1 on inhomogeneous grid
+yy = copy.deepcopy(xx)
+yy[range(1,N_cells,2)] += 0.25*(xR-xL)/N_cells 
+poisson_inhomogeneous_grid = HHO_kernel(yy)
+test_HHO(poisson_inhomogeneous_grid, u, ddu, bc)
 
 # Test 2 : u(x) = 1 - x^3
 u = lambda x: -x**3 + 1

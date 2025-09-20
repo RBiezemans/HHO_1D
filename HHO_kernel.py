@@ -1,5 +1,5 @@
 import numpy as np
-import scipy.sparse as sp
+from scipy.linalg import cho_factor, cho_solve
 import warnings 
 
 class HHO_kernel:
@@ -393,13 +393,23 @@ class HHO_cell:
             Representation of the solution in the cell on points_plot.
         reconstruction_plot : ndarray
             Representation of the potential reconstruction in the cell on points_plot.
+        mass : ndarray
+            Mass matrix of the polynomial basis of degree self.degree on the cell.
+        mass_cho : scipy.lingal.cho_factor
+            Cholesky factorization of the mass matrix of the polynomial basis of degree self.degree on the cell.
+
+
 
     Methods
     -------
         solve(source, sol_global_left, sol_global_right))
             Solve local problem based on the source term and the solution to the global solution on both faces of the cell.
+        quadrature(self, deg):
+            Compute the sample points and weights for Gauss-Legendre quadrature on the cell.
         evaluate_basis(points)
-            Evaluate the basis functions on the cell and their derivatives in prescribed points.
+            Evaluate the basis functions on the cell and their derivatives at prescribed points.
+        evaluate_fun(points, f)
+            Evaluate a function given by its coefficients with respect to the basis at prescribed points.
     """
 
     def __init__(self, x_left, x_right, degree):
@@ -430,6 +440,15 @@ class HHO_cell:
         self._points_plot = None
         self._solution_plot = None
         self._reconstruction_plot = None
+
+        # Matrices for the discrete cell problem
+        self._quad_degree_mass = self.degree+1
+        self._mass = None
+        self._mass_cho = None
+        # self._mass_cho_lower is a flag indicating whether the factor is in the lower or upper triangle 
+        #  returned by scipy.linalg.cho_factor
+        # It is not meant to be part of the public interface of the class
+        self._mass_cho_lower = None 
 
     @property 
     def solution(self):
@@ -519,10 +538,35 @@ class HHO_cell:
             self._reconstruction_plot = self.solution + (self.solution_faces[1]-self.solution_faces[0])*(self.points_plot-self.barycenter)/self.h
         else:
             raise ValueError("Local problems have only been implemented for cell degree 0.")
-        
+    
+    def quadrature(self, deg):
+        """
+        Compute the sample points and weights for Gauss-Legendre quadrature on the cell.
+
+        The integration is exact for polynomials up to degree 2*deg-1.
+
+        Parameters
+        ----------
+            deg : int
+                Number of sample points and weights. It must be >= 1.
+
+        Returns
+        -------
+            x : ndarray
+                1-D ndarray containing the sample points.
+            y : ndarray
+                1-D ndarray containing the weights.
+        """
+        x_left_reference = -1 # length end point of the reference cell (-1,1)
+        h_reference = 2 # length of the reference cell
+        x, w = np.polynomial.legendre.leggauss(deg)
+        x = (x - x_left_reference) / h_reference * self.h + self.x_left
+        return x, w
+
+
     def evaluate_basis(self, points):
         """
-        Evaluate the basis functions on the cell and their derivatives in prescribed points.
+        Evaluate the basis functions on the cell and their derivatives at prescribed points.
 
         Parameters
         ----------
@@ -535,6 +579,7 @@ class HHO_cell:
             Values of the basis functions.
             The array is of the shape (N_points, N_basis): the first axis corresponds to 
             different evaluation points and the second axis to different basis functions.
+            The constant basis function (kernel of the gradient) is the first basis function.
 
         ndarray
             Values of the gradient, in the same format as the first output.
@@ -553,3 +598,73 @@ class HHO_cell:
         gradient_value = np.zeros((N_points,self.degree+1)) # no need to compute the first basis function
         gradient_value[:,1:] = (points_scaled[:] ** powers[:,:-1]) * (powers[0,1:] * 2/self.h)
         return basis_value, gradient_value
+    
+    def evaluate_fun(self, points, f):
+        """
+        Evaluate a function given by its coefficients in the basis at prescribed points.
+
+        Parameters
+        ----------
+            points : ndarray
+                The points in which the basis is to be evaluated.
+            f : ndarray
+                List of coefficients of the function to be evaluated with respect to the basis.
+
+        Returns
+        -------
+        ndarray
+            Values of the function at the given points.
+        """
+        basis, _ = self.evaluate_basis(points)
+        return basis @ f
+    
+    @property 
+    def mass(self):
+        """Mass matrix of the polynomial basis of degree self.degree on the cell."""
+        if self._mass is None:
+            self._build_mass() # must set self._mass_cho to None
+        return self._mass
+    
+    def _build_mass(self):
+        quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
+        basis, _ = self.evaluate_basis(quad_points)
+        basis_column = basis[:,:,None]
+        basis_row = basis[:,None,:]
+        mass = np.einsum('ijk,ikl->ijl', basis_column, basis_row)
+        self._mass = np.einsum('i,ikl->kl', quad_weights, mass)
+        self._mass_cho = None
+
+    @property 
+    def mass_cho(self):
+        """Cholesky factorization of the mass matrix of the polynomial basis of degree self.degree on the cell."""
+        if self._mass_cho is None:
+            self._build_mass_cho()
+        return self._mass_cho
+    
+    def _build_mass_cho(self):
+        self._mass_cho, self._mass_cho_lower = cho_factor(self.mass, overwrite_a=True)
+
+    def L2_projection(self, f):
+        """
+        Compute the L2-orthogonal projection of f on the set of basis polynomials of the cell.
+
+        Parameters
+        ----------
+            f : callable
+                Function that we want to compute the interpolate of.
+                Should accept an ndarray and return an ndarray of the same size.
+        
+        Returns
+        -------
+            ndarray
+                L2-orthogonal projection of f in the form of its coefficients in the basis.
+        """
+        # Compute RHS for the projection linear system
+        quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
+        f_eval = f(quad_points)
+        basis, _ = self.evaluate_basis(quad_points)
+        rhs = basis * f_eval[:,None] # Multiply each basis function by f
+        rhs = np.einsum('i,ik->k', quad_weights, rhs)
+        # Solve projection problem
+        return cho_solve((self.mass_cho, self._mass_cho_lower), rhs, overwrite_b=True)
+
