@@ -38,21 +38,6 @@ class HHO_kernel:
             Discrete right-hand side for the Neumann system associated to the source term.
         solution_face : ndarray
             Solution vector of the transmission problem.
-
-    Methods
-    -------
-        solve_transmission(f, bc_left=None, bc_right=None, average=None)
-            Solve the global transmission problem with source term f.
-            Non-homogeneous Dirichlet boundary conditions are set by specifying bc_left, bc_right.
-            In case of pure Neumann conditions, the average of the solution is set by specifying average.
-        solve_cell_problems()
-            Solve the cell problem on all cells.
-            Requires the prior solution of the transmission problem.
-        solve(f, bc_left=None, bc_right=None, average=None)
-            Solve the transmission problems followed by the cell problems.
-            The same comments as for solve_transmission apply.
-        plot(ax, *args)
-            Plot solution at the faces and on the cells on the provided Matplotlib axis.
     """
 
     def __init__(self, x, degree=0):
@@ -424,21 +409,6 @@ class HHO_cell:
             Cholesky factorization of reconstruction_matrix.
         reconstruction_source : ndarray
             Matrix to compute the right-hand side of the reconstruction problem on the cell from the HHO DOFs.
-
-    Methods
-    -------
-        solve(source, sol_global_left, sol_global_right))
-            Solve local problem based on the source term and the solution to the global solution on both faces of the cell.
-        quadrature(self, deg):
-            Compute the sample points and weights for Gauss-Legendre quadrature on the cell.
-        evaluate_basis(points, degree=None)
-            Evaluate the basis functions on the cell and their derivatives at prescribed points.
-        evaluate_fun(points, f, degree=None)
-            Evaluate a function given by its coefficients in the basis at prescribed points and its gradient.
-        compute_L2_projection(f)
-            Compute the L2-orthogonal projection of f on the set of basis polynomials of the cell.
-        compute_reconstruction(dofs):
-            Compute higher-order reconstruction in the polynomial basis corresponding to given HHO cell and face DOFs.
     """
 
     def __init__(self, x_left, x_right, degree):
