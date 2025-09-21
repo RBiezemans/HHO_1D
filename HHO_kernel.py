@@ -416,7 +416,7 @@ class HHO_cell:
         evaluate_basis(points, degree=None)
             Evaluate the basis functions on the cell and their derivatives at prescribed points.
         evaluate_fun(points, f, degree=None)
-            Evaluate a function given by its coefficients with respect to the basis at prescribed points.
+            Evaluate a function given by its coefficients in the basis at prescribed points and its gradient.
         compute_L2_projection(f)
             Compute the L2-orthogonal projection of f on the set of basis polynomials of the cell.
         compute_reconstruction(dofs):
@@ -641,7 +641,7 @@ class HHO_cell:
     
     def evaluate_fun(self, points, f, degree = None):
         """
-        Evaluate a function given by its coefficients in the basis at prescribed points.
+        Evaluate a function given by its coefficients in the basis at prescribed points and its gradient.
 
         Parameters
         ----------
@@ -657,9 +657,11 @@ class HHO_cell:
         -------
         ndarray
             Values of the function at the given points.
+        ndarray
+            Values of the gradient of the function at the given points.
         """
-        basis, _ = self.evaluate_basis(points, degree)
-        return basis @ f
+        basis, gradient = self.evaluate_basis(points, degree)
+        return basis @ f, gradient @ f
     
     @property 
     def mass(self):
