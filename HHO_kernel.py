@@ -50,8 +50,8 @@ class HHO_kernel:
             Requires the prior solution of the transmission problem.
         solve(f, bc_left=None, bc_right=None, average=None)
             Solve the transmission problems followed by the cell problems.
-            The same comments as for solve_transmission apply
-        plot(ax)
+            The same comments as for solve_transmission apply.
+        plot(ax, *args)
             Plot solution at the faces and on the cells on the provided Matplotlib axis.
     """
 
@@ -271,10 +271,10 @@ class HHO_kernel:
                             bc_left = 0
                         else:
                             bc_right = 0
-                        warnings.warn(f"No Dirichlet condition is provided at the {side}, homogeneous condition is used.", RuntimeWarning)
+                        warnings.warn(f"No Dirichlet condition is provided at the {side}, homogeneous condition is used.")
                 case 'N':
                     if bc_check is not None:
-                        warnings.warn(f"Neumann condition at the {side} is specified, but only homogeneous conditions are supported.", RuntimeWarning)
+                        warnings.warn(f"Neumann condition at the {side} is specified, but only homogeneous conditions are supported.")
         match self.boundary_conditions:
             case 'NN':
                 if average is None:
@@ -333,7 +333,7 @@ class HHO_kernel:
         self.solve_cell_problems()
 
 
-    def plot(self, ax):
+    def plot(self, ax, *args):
         """
         Plot HHO solution/reconstruction on the provided Matplotlib axis.
 
@@ -341,25 +341,43 @@ class HHO_kernel:
         ----------
             ax : matplotlib.axes.Axes
                 Axis to draw the plot on.
+            *args
+                Additional arguments to specify which elements to plot. Should be one of:
+                * "faces", to plot the solution at the faces;
+                * "cells", to plot the solution at the cells;
+                * "reconstruction", to plot the reconstruction of the potential that
+                  corresponds to the solution at the faces and cells.
+                When no additional positional arguments are provided all of the above  are plotted.
         """
-        ax.plot(self.points, 
-                self.solution_face, 
-                'r.', 
-                markersize=10, 
-                markeredgewidth=1, 
-                label="HHO \u2014 faces")
-        for i, cell in enumerate(self.cells):
-            plt_solution, = ax.plot(cell.points_plot, 
-                                    cell.solution_plot, 
-                                    color='#1f77b4', 
-                                    linewidth=2)
-            plt_reconstruction, = ax.plot(cell.points_plot,
-                                          cell.reconstruction_plot,
-                                          color='orange', 
-                                          linewidth=2)
-            if i == 0:
-                plt_solution.set_label("HHO \u2014 cells")
-                plt_reconstruction.set_label("HHO \u2014 reconstruction")
+        if not args:
+            args = ("faces", "cells", "reconstruction")
+        args = (arg.lower() for arg in args)
+        # Plot solution at the faces
+        if "faces" in args:
+            ax.plot(self.points, 
+                    self.solution_face, 
+                    'r.', 
+                    markersize=10, 
+                    markeredgewidth=1, 
+                    label="HHO \u2014 faces")
+        # Plot solution at the cells
+        if "cells" in args:
+            for i, cell in enumerate(self.cells):
+                plt_solution, = ax.plot(cell.points_plot, 
+                                        cell.solution_plot, 
+                                        color='#1f77b4', 
+                                        linewidth=2)
+                if i == 0:
+                    plt_solution.set_label("HHO \u2014 cells")
+        # Plot reconstructed potential in the higher-order space
+        if "reconstruction" in args:
+            for i, cell in enumerate(self.cells):
+                plt_reconstruction, = ax.plot(cell.points_plot,
+                                            cell.reconstruction_plot,
+                                            color='orange', 
+                                            linewidth=2)
+                if i == 0:
+                    plt_reconstruction.set_label("HHO \u2014 reconstruction")
         ax.set_title(f"Approximation by HHO method (degree {self.cell_degree})")
         ax.set_xlabel("x")
         ax.set_ylabel("u(x)")
