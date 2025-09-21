@@ -257,7 +257,7 @@ class HHO_kernel:
 
         Warns
         -----
-            RuntimeWarning
+            UserWarning
                 If the boundary conditions described by bc_left, bc_right and average do not correspond to self.boundary_conditions settings.
         """
         self.source = f
@@ -349,7 +349,7 @@ class HHO_kernel:
                   corresponds to the solution at the faces and cells.
                 When no additional positional arguments are provided all of the above  are plotted.
         """
-        if not args:
+        if len(args)==0:
             args = ("faces", "cells", "reconstruction")
         args = (arg.lower() for arg in args)
         # Plot solution at the faces
@@ -575,7 +575,9 @@ class HHO_cell:
     
     def _build_reconstruction_plot(self):
         if self.degree == 0:
-            self._reconstruction_plot = self.solution + (self.solution_faces[1]-self.solution_faces[0])*(self.points_plot-self.barycenter)/self.h
+            dofs = np.array([self.solution, *self.solution_faces])
+            r = self.compute_reconstruction(dofs)
+            self._reconstruction_plot, _ = self.evaluate_fun(self._points_plot, r, self.degree_reconstruction)
         else:
             raise ValueError("Local problems have only been implemented for cell degree 0.")
     
@@ -630,6 +632,8 @@ class HHO_cell:
         """
         if degree is None:
             degree = self.degree
+        if degree == 0:
+            return np.ones(len(points)), np.zeros(len(points))
         N_points = len(points)
         # Rescale evaluation points to the refernce cell (-1,1)
         h_reference = 2.0
@@ -848,8 +852,16 @@ class HHO_cell:
         -------
             Higher-order reconstruction based on the provided DOS in the form of its coefficients in the basis.
         """
-        # solve_reconstruction
-        rhs = self.reconstruction_source @ dofs
-        reconstruction = cho_solve((self.reconstruction_cho, self._reconstruction_cho_lower), rhs, overwrite_b=True)
-        # Append the value of the average to complete the DOFs of the reconstruction
-        return np.concatenate(([dofs[0]], reconstruction))
+        if self.degree == 0:
+            # We use the explicit solution of the reconstruction problem available in this case
+            gradient = (dofs[-1]-dofs[-2])/self.h
+            r = lambda x: dofs[0] + gradient*(x-self.barycenter)
+            # We need to manually project the reconstruction on the reconstruction space
+            cell_reconstruction = HHO_cell(self.x_left, self.x_right, self.degree_reconstruction)
+            return cell_reconstruction.compute_L2_projection(r)
+        else:
+            # solve_reconstruction
+            rhs = self.reconstruction_source @ dofs
+            reconstruction = cho_solve((self.reconstruction_cho, self._reconstruction_cho_lower), rhs, overwrite_b=True)
+            # Append the value of the average to complete the DOFs of the reconstruction
+            return np.concatenate(([dofs[0]], reconstruction))
