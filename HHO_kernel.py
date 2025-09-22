@@ -403,10 +403,12 @@ class HHO_cell:
             Cholesky factorization of mass_matrix.
         degree_reconstruction : int
             Polynomial degree of the space for the potential reconstruction.
-        reconstruction_matrix : ndarray
+        reconstruction_stiffness_matrix : ndarray
             Stiffness matrix in the space for the potential reconstruction, without the constant function.
-        reconstruction_cho : scipy.linalg.cho_factor
-            Cholesky factorization of reconstruction_matrix.
+        reconstruction_stiffness_cho : scipy.linalg.cho_factor
+            Cholesky factorization of reconstruction_stiffness_matrix.
+        reconstruction_matrix : ndarray
+            Matrix to compute the reconstruction from the HHO cell and face unknowns.
         reconstruction_source : ndarray
             Matrix to compute the right-hand side of the reconstruction problem on the cell from the HHO DOFs.
         stabilization_matrix(self):
@@ -458,13 +460,14 @@ class HHO_cell:
             #  returned by scipy.linalg.cho_factor
             # It is not meant to be part of the public interface of the class
         self._quad_degree_reconstruction = self.degree+1
-        self._reconstruction_matrix = None
-        self._reconstruction_cho = None
-        self._reconstruction_cho_lower = None # similar use as self._mass_cho_lower
+        self._reconstruction_stiffness_matrix = None
+        self._reconstruction_stiffness_cho = None
+        self._reconstruction_stiffness_cho_lower = None # similar use as self._mass_cho_lower
         self._quad_degree_reconstruction_source = self.degree
             # on the faces we would need a higher degree for the quadrature,
             # but in 1D integrals over the faces are simply point-wise evaluation
         self._reconstruction_source = None
+        self._reconstruction_matrix = None
         self._stabilization_matrix = None
         self._local_matrix = None
         self._local_cho = None 
@@ -763,13 +766,13 @@ class HHO_cell:
         return np.einsum('i,ik->k', quad_weights, fbasis)
 
     @property
-    def reconstruction_matrix(self):
+    def reconstruction_stiffness_matrix(self):
         """Stiffness matrix in the space for the potential reconstruction, without the constant function."""
-        if self._reconstruction_matrix is None:
-            self._build_reconstruction_matrix()
-        return self._reconstruction_matrix
+        if self._reconstruction_stiffness_matrix is None:
+            self._build_reconstruction_stiffness_matrix()
+        return self._reconstruction_stiffness_matrix
     
-    def _build_reconstruction_matrix(self):
+    def _build_reconstruction_stiffness_matrix(self):
         # Evaluate gradient of the basis functions at the quadrature points
         quad_points, quad_weights = self.quadrature(self._quad_degree_reconstruction)
         _, dbasis = self.evaluate_basis(quad_points, self.degree_reconstruction)
@@ -781,20 +784,20 @@ class HHO_cell:
         # Compute basis-basis multiplication
         stiffness = np.einsum('ijk,ikl->ijl', dbasis_column, dbasis_row)
         # Integrate stiffness matrix
-        self._reconstruction_matrix = np.einsum('i,ikl->kl', quad_weights, stiffness)
+        self._reconstruction_stiffness_matrix = np.einsum('i,ikl->kl', quad_weights, stiffness)
         # Reset the Cholesky decomposition of the stiffness matrix
-        self._reconstruction_cho = None
-        self._reconstruction_cho_lower = None
+        self._reconstruction_stiffness_cho = None
+        self._reconstruction_stiffness_cho_lower = None
 
     @property
-    def reconstruction_cho(self):
-        """Cholesky factorization of the matrix in the space for the potential reconstruction (without the constant function)."""
-        if self._reconstruction_cho is None:
-            self._build_reconstruction_cho()
-        return self._reconstruction_cho
+    def reconstruction_stiffness_cho(self):
+        """Cholesky factorization of reconstruction_stiffness_matrix."""
+        if self._reconstruction_stiffness_cho is None:
+            self._build_reconstruction_stiffness_cho()
+        return self._reconstruction_stiffness_cho
     
-    def _build_reconstruction_cho(self):
-        self._reconstruction_cho, self._reconstruction_cho_lower = cho_factor(self.reconstruction_matrix, overwrite_a=True)
+    def _build_reconstruction_stiffness_cho(self):
+        self._reconstruction_stiffness_cho, self._reconstruction_stiffness_cho_lower = cho_factor(self.reconstruction_stiffness_matrix, overwrite_a=True)
         
     @property 
     def reconstruction_source(self):
@@ -855,6 +858,23 @@ class HHO_cell:
             source[:,self.degree+1+k] = faces_normal[k] * dbasis_rec_column[k,:,0]
         ### Done
         self._reconstruction_source = source
+    
+    @property 
+    def reconstruction_matrix(self):
+        """Matrix to compute the reconstruction from the HHO cell and face unknowns."""
+        if self._reconstruction_matrix is None:
+            self._build_reconstruction_matrix()
+        return self._reconstruction_matrix
+
+    def _build_reconstruction_matrix(self):
+        lower = self._reconstruction_stiffness_cho_lower
+        if lower:
+            K = self.reconstruction_stiffness_cho
+        else:
+            K = self.reconstruction_stiffness_cho.T
+        H = self.reconstruction_source
+        Y = solve_tr(K, H, lower=True)
+        self._reconstruction_matrix = solve_tr(K.T, Y, lower=False)
 
     def compute_reconstruction(self, dofs):
         """
@@ -880,7 +900,7 @@ class HHO_cell:
         else:
             # solve_reconstruction
             rhs = self.reconstruction_source @ dofs
-            reconstruction = cho_solve((self.reconstruction_cho, self._reconstruction_cho_lower), rhs, overwrite_b=True)
+            reconstruction = cho_solve((self.reconstruction_stiffness_cho, self._reconstruction_stiffness_cho_lower), rhs, overwrite_b=True)
             # Compute the coefficient in front of the constant basis function to set the average of the reconstruction
             quad_average_x, quad_average_w = self.quadrature(self.degree_reconstruction+1)
             basis_r, _ = self.evaluate_basis(quad_average_x, self.degree_reconstruction)
@@ -902,6 +922,9 @@ class HHO_cell:
         return self._stabilization_matrix
 
     def _build_stabilization_matrix(self):
+        ###
+        ### Penalty on the jump between the trace on the faces and the face unknowns
+        ###
         stabilization = np.zeros((self.number_faces, self.degree+1+self.number_faces))
         face_coordinates = [self.x_left, self.x_right]
         for k in range(self.number_faces):
@@ -910,6 +933,9 @@ class HHO_cell:
             # Add volume contribution at the face
             basis, _ = self.evaluate_basis(face_coordinates[k])
             stabilization[k,:self.degree+1] = basis
+        ###
+        ### Penalty on the high-order reconstruction
+        ###
         #
         # ... to be completed ...
         #
@@ -925,21 +951,13 @@ class HHO_cell:
         return self._local_matrix
     
     def _build_local_matrix(self):
-        lower = self._reconstruction_cho_lower
-        if lower:
-            K = self.reconstruction_cho
-        else:
-            K = self.reconstruction_cho.T
-        H = self.reconstruction_source#[:,:-self.number_faces]
-        Y = solve_tr(K, H, lower=True, overwrite_b=True)
-        KinvH = solve_tr(K.T, Y, lower=False, overwrite_b=True)
-        local_matrix = H.T @ KinvH
+        H = self.reconstruction_source
+        local_matrix = H.T @ self.reconstruction_matrix
         # Stabilization contributions
         for k in range(self.number_faces):
             S = self.stabilization_matrix[k,:]
             S = S[:,None] @ S[None,:] 
             local_matrix += 1.0/self.h * S
-        # local_matrix = local_matrix[:-self.number_faces,:-self.number_faces]
         self._local_matrix = local_matrix
         self._local_cho = None
         self._local_cho_lower = None
