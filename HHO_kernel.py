@@ -2,6 +2,7 @@ import numpy as np
 import scipy.special as sp_fn # special functions, used for Legendre polynomials
 import scipy.sparse as sp
 from scipy.linalg import cho_factor, cho_solve
+from scipy.linalg import solve_triangular as solve_tr
 import warnings 
 
 class HHO_kernel:
@@ -47,7 +48,7 @@ class HHO_kernel:
         Args:
             x : ndarray
                 vertices of the discrete domain
-            degree : int
+            degree : int, default = 0
                 polynomial degree of the cell unknowns
         """
         self.points = x
@@ -130,12 +131,12 @@ class HHO_kernel:
 
     @property
     def transmission_matrix(self):
+        """Matrix of the discrete linear system of the global transmission problem with Neumann conditions."""
         if self._transmission_matrix is None:
             self._build_transmission_matrix()
         return self._transmission_matrix
 
     def _build_transmission_matrix(self):
-        """Build discrete linear system of the global transmission problem with Neumann conditions."""
         # Compute the three nonzero diagonals
         upper_diag = -1/self.spacing 
         lower_diag = upper_diag
@@ -278,7 +279,7 @@ class HHO_kernel:
                 constraints = [bc_right]
             case 'DD':
                 constraints = [bc_left, bc_right]
-        rhs = np.concatenate((self.transmission_rhs, np.array(constraints)))
+        rhs = np.concatenate([self.transmission_rhs, np.array(constraints)])
         # Solve
         sol = self.transmission_system.solve(rhs)
         # Save solution to instance
@@ -385,10 +386,9 @@ class HHO_cell:
         degree : int
             Polynomial degree of the cell unknowns.
         solution : ndarray
-            Solution to the local problem on the cell in the polynomial basis and on the faces.
+            Solution to the local problem on the cell in the polynomial basis.
         solution_faces : ndarray
-            Solution at the faces of the cell.
-            solution_faces[0] is on the left face, solution_faces[1] on the right face.
+            Solution at the faces of the cell, ordered from left to right.
         plot_margin : ndarray
             Margin around the faces that is used for visualization of the discontinuous solution.
         points_plot : ndarray
@@ -397,10 +397,10 @@ class HHO_cell:
             Representation of the solution in the cell on points_plot.
         reconstruction_plot : ndarray
             Representation of the potential reconstruction in the cell on points_plot.
-        mass : ndarray
+        mass_matrix : ndarray
             Mass matrix of the polynomial basis of degree self.degree on the cell.
         mass_cho : scipy.lingal.cho_factor
-            Cholesky factorization of mass.
+            Cholesky factorization of mass_matrix.
         degree_reconstruction : int
             Polynomial degree of the space for the potential reconstruction.
         reconstruction_matrix : ndarray
@@ -409,6 +409,12 @@ class HHO_cell:
             Cholesky factorization of reconstruction_matrix.
         reconstruction_source : ndarray
             Matrix to compute the right-hand side of the reconstruction problem on the cell from the HHO DOFs.
+        stabilization_matrix(self):
+            Matrix of the stabilization operator.
+        local_matrix : ndarray
+            Matrix of discrete system for the cell problem including the face unknowns.
+        local_cho(self):
+            Cholesky decomposition of local_matrix without the face unknowns.
     """
 
     def __init__(self, x_left, x_right, degree):
@@ -433,6 +439,7 @@ class HHO_cell:
         self.degree = degree
         self.degree_reconstruction = self.degree+1
             # polynomial degree of the space for the reconstruction of the potential
+        self.number_faces = 2
 
         self._solution = None
         self._solution_faces = None
@@ -444,7 +451,7 @@ class HHO_cell:
 
         # Matrices for the discrete cell problem
         self._quad_degree_mass = self.degree+1
-        self._mass = None
+        self._mass_matrix = None
         self._mass_cho = None
         self._mass_cho_lower = None 
             # self._mass_cho_lower is a flag indicating whether the factor is in the lower or upper triangle 
@@ -453,19 +460,22 @@ class HHO_cell:
         self._quad_degree_reconstruction = self.degree+1
         self._reconstruction_matrix = None
         self._reconstruction_cho = None
-        self._reconstruction_cho_lower = None
-            # similar use as to self._mass_cho_lower
+        self._reconstruction_cho_lower = None # similar use as self._mass_cho_lower
         self._quad_degree_reconstruction_source = self.degree
             # on the faces we would need a higher degree for the quadrature,
             # but in 1D integrals over the faces are simply point-wise evaluation
         self._reconstruction_source = None
+        self._stabilization_matrix = None
+        self._local_matrix = None
+        self._local_cho = None 
+        self._local_cho_lower = None # similar use as self._mass_cho_lower
 
     @property 
     def solution(self):
         """
-        Solution to the local problem on the cell in the polynomial basis and on the faces.
+        Solution to the local problem on the cell in the polynomial basis.
 
-        Can only be set through the solve method.
+        Can only be set through HHO_cell.solve().
         """
         assert self._solution is not None, "Solution to local problem has not yet been computed."
         return self._solution
@@ -476,7 +486,7 @@ class HHO_cell:
         Solution at the faces of the cell.
         
         solution_faces[0] is the left face, solution_faces[1] is the right face.
-        Can only be set by self.solve()
+        Can only be set through HHO_cell.solve()
         """
         assert self._solution_faces is not None, "Solution at the cell faces is unknown."
         return self._solution_faces
@@ -497,14 +507,27 @@ class HHO_cell:
             sol_global_right : double
                 Solution to the global problem at the right vertex of the cell.
         """
-        self._solution = np.zeros(self.degree+3)
+        solution_faces = np.array([sol_global_left, sol_global_right])
         if self.degree == 0:
-            source_average = self.h * (source(self.x_left) + source(self.x_right))/2.0
+            # 1st order approximation of the average of the source
+            source_average = self.h * source(self.barycenter)
+            # 2nd order approximation of the average of the source
+            # source_average = self.h * (source(self.x_left) + source(self.x_right))/2.0
             solution = 0.5 * self.h**2 * source_average + 0.5*(sol_global_left + sol_global_right)
+            # Rescale by the value of the constant basis function in case it might not be 1
+            value_basis, _ = self.evaluate_basis(self.barycenter)
+            solution = solution/value_basis
         else:
-            raise ValueError("Local problems have only been implemented for cell degree 0.")
+            # Contribution of the source term of the PDE to the local problem
+            rhs_volume = self.compute_integral_against_basis(source)
+            # Contribution of the face unknowns to the local problem
+            rhs_face = self.local_matrix @ np.concatenate([np.zeros(self.degree+1), solution_faces])
+            rhs_face = rhs_face[0:-self.number_faces]
+            # Build total RHS and solve local problem
+            rhs = rhs_volume - rhs_face
+            solution = cho_solve((self.local_cho, self._local_cho_lower), rhs, overwrite_b=True)
         self._solution = solution
-        self._solution_faces = np.array([sol_global_left, sol_global_right])
+        self._solution_faces = solution_faces
         self._solution_plot = None
         self._reconstruction_plot = None
 
@@ -545,7 +568,7 @@ class HHO_cell:
     
     def _build_reconstruction_plot(self):
         if self.degree == 0:
-            dofs = np.array([self.solution, *self.solution_faces])
+            dofs = np.concatenate([self.solution, self.solution_faces])
             r = self.compute_reconstruction(dofs)
             self._reconstruction_plot, _ = self.evaluate_fun(self._points_plot, r, self.degree_reconstruction)
         else:
@@ -583,7 +606,7 @@ class HHO_cell:
 
         Parameters
         ----------
-            points : ndarray
+            points : ndarray | scalar type
                 The points in which the basis is to be evaluated.
             degree : int | None, default = None
                 Polynomial degree of the basis to be evaluated.
@@ -602,33 +625,38 @@ class HHO_cell:
         """
         if degree is None:
             degree = self.degree
+        if np.isscalar(points) or points.ndim == 0:
+            points = np.reshape(points,(1,1))
+
         if degree == 0:
-            return np.ones(len(points)), np.zeros(len(points))
-        N_points = len(points)
-        # Rescale evaluation points to the refernce cell (-1,1)
-        h_reference = 2.0
-        points_scaled = (points-self.barycenter)*h_reference/self.h
-        #
-        # Monomial basis
-        powers = np.arange(0,degree+1)
-        # Reshape points and powers to take advantage of numpy broadcasting
-        points_scaled = points_scaled[:, None]
-        powers = powers[None, :]
-        # Compute value of the basis functions
-        basis_value = points_scaled ** powers
-        # Compute value of the derivatives
-        gradient_value = np.zeros((N_points,degree+1)) 
-        # The derivative of the first basis function is zero everywhere
-        gradient_value[:,1:] = (points_scaled[:] ** powers[:,:-1]) * (powers[0,1:] * h_reference/self.h)
-        #
-        # Legendre 
-        # basis_value = np.zeros((N_points,degree+1))
-        # gradient_value = np.zeros(basis_value.shape)
-        # for i in range(degree+1):
-        #     basis_value[:,i] = sp_fn.eval_legendre(i, points_scaled)
-        #     gradient = sp_fn.legendre(i).deriv()
-        #     gradient_value[:,i] = gradient(points_scaled)
-        #
+            basis_value = np.ones(len(points))
+            gradient_value = np.zeros(len(points))
+        else:
+            N_points = len(points)
+            # Rescale evaluation points to the refernce cell (-1,1)
+            h_reference = 2.0
+            points_scaled = (points-self.barycenter)*h_reference/self.h
+            #
+            # Monomial basis
+            powers = np.arange(0,degree+1)
+            # Reshape points and powers to take advantage of numpy broadcasting
+            points_scaled = points_scaled[:, None]
+            powers = powers[None, :]
+            # Compute value of the basis functions
+            basis_value = points_scaled ** powers
+            # Compute value of the derivatives
+            gradient_value = np.zeros((N_points,degree+1)) 
+            # The derivative of the first basis function is zero everywhere
+            gradient_value[:,1:] = (points_scaled[:] ** powers[:,:-1]) * (powers[0,1:] * h_reference/self.h)
+            #
+            # Legendre 
+            # basis_value = np.zeros((N_points,degree+1))
+            # gradient_value = np.zeros(basis_value.shape)
+            # for i in range(degree+1):
+            #     basis_value[:,i] = sp_fn.eval_legendre(i, points_scaled)
+            #     gradient = sp_fn.legendre(i).deriv()
+            #     gradient_value[:,i] = gradient(points_scaled)
+            #
         return basis_value, gradient_value
     
     def evaluate_fun(self, points, f, degree = None):
@@ -656,13 +684,13 @@ class HHO_cell:
         return basis @ f, gradient @ f
     
     @property 
-    def mass(self):
+    def mass_matrix(self):
         """Mass matrix of the polynomial basis of degree self.degree on the cell."""
-        if self._mass is None:
-            self._build_mass() # must set self._mass_cho to None
-        return self._mass
+        if self._mass_matrix is None:
+            self._build_mass_matrix()
+        return self._mass_matrix
     
-    def _build_mass(self):
+    def _build_mass_matrix(self):
         # Evaluate basis functions at the quadrature points
         quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
         basis, _ = self.evaluate_basis(quad_points)
@@ -670,9 +698,9 @@ class HHO_cell:
         basis_column = basis[:,:,None]
         basis_row = basis[:,None,:]
         # Compute basis-basis multiplication
-        mass = np.einsum('ijk,ikl->ijl', basis_column, basis_row)
+        mass_matrix = np.einsum('ijk,ikl->ijl', basis_column, basis_row)
         # Integrate mass matrix
-        self._mass = np.einsum('i,ikl->kl', quad_weights, mass)
+        self._mass_matrix = np.einsum('i,ikl->kl', quad_weights, mass_matrix)
         # Reset the Cholesky decomposition of the mass matrix
         self._mass_cho = None
         self._mass_cho_lower = None
@@ -685,7 +713,7 @@ class HHO_cell:
         return self._mass_cho
     
     def _build_mass_cho(self):
-        self._mass_cho, self._mass_cho_lower = cho_factor(self.mass, overwrite_a=True)
+        self._mass_cho, self._mass_cho_lower = cho_factor(self.mass_matrix, overwrite_a=True)
 
     def compute_L2_projection(self, f):
         """
@@ -702,20 +730,41 @@ class HHO_cell:
             ndarray
                 L2-orthogonal projection of f in the form of its coefficients in the basis.
         """
-        # Compute RHS for the projection linear system
-        quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
-        f_eval = f(quad_points)
-        basis, _ = self.evaluate_basis(quad_points)
-        rhs = basis * f_eval[:,None] # Multiply each basis function by f
-        rhs = np.einsum('i,ik->k', quad_weights, rhs)
+        # Compute RHS for linear system of the L2 projection
+        rhs = self.compute_integral_against_basis(f)
         # Solve projection problem
         return cho_solve((self.mass_cho, self._mass_cho_lower), rhs, overwrite_b=True)
 
+    def compute_integral_against_basis(self, f, quad_degree=None):
+        """
+        Compute the integral of a function against all basis functions of the cell.
+
+        The output appears on the RHS of, e.g., the L2-projection and the reconstruction problem.
+
+        Parameters
+        ----------
+            f : callable
+                Function to be integrated
+                Should accept an ndarray and return an ndarray of the same size.
+            quad_degree : int | None, default = None
+                Degree of the quadrature rule to compute the integrals.
+                When None, self._quad_degree is used.
+
+        Returns
+        -------
+            ndarray
+                Integral against each basis function.
+        """
+        quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
+        f_eval = f(quad_points)
+        basis, _ = self.evaluate_basis(quad_points)
+        fbasis = basis * f_eval[:,None] # Multiply each basis function by f
+        # Compute integrals
+        return np.einsum('i,ik->k', quad_weights, fbasis)
+
     @property
     def reconstruction_matrix(self):
-        """
-        Stiffness matrix in the space for the potential reconstruction, without the constant function.
-        """
+        """Stiffness matrix in the space for the potential reconstruction, without the constant function."""
         if self._reconstruction_matrix is None:
             self._build_reconstruction_matrix()
         return self._reconstruction_matrix
@@ -763,8 +812,7 @@ class HHO_cell:
     
     def _build_reconstruction_source(self):
         # Initialization 
-        nb_faces = 2
-        source = np.zeros([self.degree+1, self.degree+1+nb_faces])
+        source = np.zeros((self.degree+1, self.degree+1+self.number_faces))
         ###
         ### Integrals over the cell volume
         ###
@@ -790,7 +838,7 @@ class HHO_cell:
         ###
         ### Compute (basis,dbasis)_L2(faces), trial functions in the cell space
         # Evaluate basis functions at the faces
-        faces = np.array([self.x_left, self.x_right])
+        faces = np.array((self.x_left, self.x_right))
         faces_normal = np.array([-1,1])
         basis, _ = self.evaluate_basis(faces)
         _, dbasis_rec = self.evaluate_basis(faces, self.degree_reconstruction)
@@ -833,5 +881,78 @@ class HHO_cell:
             # solve_reconstruction
             rhs = self.reconstruction_source @ dofs
             reconstruction = cho_solve((self.reconstruction_cho, self._reconstruction_cho_lower), rhs, overwrite_b=True)
-            # Append the value of the average to complete the DOFs of the reconstruction
-            return np.concatenate(([dofs[0]], reconstruction))
+            # Compute the coefficient in front of the constant basis function to set the average of the reconstruction
+            quad_average_x, quad_average_w = self.quadrature(self.degree_reconstruction+1)
+            basis_r, _ = self.evaluate_basis(quad_average_x, self.degree_reconstruction)
+            # Compute current integral of the reconstruction (without the constant function)
+            integral_r = np.dot(basis_r[:,1:] @ reconstruction, quad_average_w)
+            # Compute integral of the constant basis function
+            integral0 = np.dot(basis_r[:,0], quad_average_w)
+            # Compute integral of the function given by the DOFs
+            integral_dof = np.dot(basis_r[:,:-1] @ dofs[:-self.number_faces], quad_average_w)
+            # Compute coefficient in front of the constant basis function
+            c0 = np.array((integral_dof - integral_r)/integral0, ndmin=1)
+            return np.concatenate([c0, reconstruction])
+    
+    @property 
+    def stabilization_matrix(self):
+        """Matrix of the stabilization operator."""
+        if self._stabilization_matrix is None:
+            self._build_stabilization_matrix()
+        return self._stabilization_matrix
+
+    def _build_stabilization_matrix(self):
+        stabilization = np.zeros((self.number_faces, self.degree+1+self.number_faces))
+        face_coordinates = [self.x_left, self.x_right]
+        for k in range(self.number_faces):
+            # Subtract DOF at the face
+            stabilization[k,self.degree+1+k] = -1
+            # Add volume contribution at the face
+            basis, _ = self.evaluate_basis(face_coordinates[k])
+            stabilization[k,:self.degree+1] = basis
+        #
+        # ... to be completed ...
+        #
+        warnings.warn("Add final stabilization contribution.")
+
+        self._stabilization_matrix = stabilization
+
+    @property 
+    def local_matrix(self):
+        """Matrix of discrete system for the local cell problem including the face unknowns."""
+        if self._local_matrix is None:
+            self._build_local_matrix()
+        return self._local_matrix
+    
+    def _build_local_matrix(self):
+        lower = self._reconstruction_cho_lower
+        if lower:
+            K = self.reconstruction_cho
+        else:
+            K = self.reconstruction_cho.T
+        H = self.reconstruction_source#[:,:-self.number_faces]
+        Y = solve_tr(K, H, lower=True, overwrite_b=True)
+        KinvH = solve_tr(K.T, Y, lower=False, overwrite_b=True)
+        local_matrix = H.T @ KinvH
+        # Stabilization contributions
+        for k in range(self.number_faces):
+            S = self.stabilization_matrix[k,:]
+            S = S[:,None] @ S[None,:] 
+            local_matrix += 1.0/self.h * S
+        # local_matrix = local_matrix[:-self.number_faces,:-self.number_faces]
+        self._local_matrix = local_matrix
+        self._local_cho = None
+        self._local_cho_lower = None
+
+    
+    @property 
+    def local_cho(self):
+        """Cholesky decomposition of local_matrix."""
+        if self._local_cho is None:
+            self._compute_local_cho()
+        return self._local_cho 
+    
+    def _compute_local_cho(self):
+        # The local problem uses homogeneous values for the face unknowns
+        local_matrix = self.local_matrix[:-self.number_faces,:-self.number_faces]
+        self._local_cho, self._local_cho_lower = cho_factor(local_matrix, overwrite_a=True)
