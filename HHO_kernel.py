@@ -403,6 +403,8 @@ class HHO_cell:
             Cholesky factorization of mass_matrix.
         degree_reconstruction : int
             Polynomial degree of the space for the potential reconstruction.
+        cell_reconstruction : HHO_cell
+            HHO cell on the same domain but with the degree of the reconstruction space.
         reconstruction_stiffness_matrix : ndarray
             Stiffness matrix in the space for the potential reconstruction, without the constant function.
         reconstruction_stiffness_cho : scipy.linalg.cho_factor
@@ -440,6 +442,7 @@ class HHO_cell:
         self.h = x_right - self.x_left
         self.degree = degree
         self.degree_reconstruction = self.degree+1
+        self._cell_reconstruction = None
             # polynomial degree of the space for the reconstruction of the potential
         self.number_faces = 2
 
@@ -736,9 +739,25 @@ class HHO_cell:
         # Compute RHS for linear system of the L2 projection
         rhs = self.compute_integral_against_basis(f)
         # Solve projection problem
-        return cho_solve((self.mass_cho, self._mass_cho_lower), rhs, overwrite_b=True)
+        return self.compute_L2_projection_from_rhs(rhs)
 
-    def compute_integral_against_basis(self, f, quad_degree=None):
+    def compute_L2_projection_from_rhs(self, rhs):
+        """
+        Compute the L2-orthogonal projection on the cell given the right-hand side vector of the system.
+
+        Parameters
+        ----------
+            rhs : ndarray
+                Right-hand side of the linear system of the L2-projecetion
+        
+        Returns
+        -------
+            ndarray
+                L2-orthogonal projection of f in the form of its coefficients in the basis.
+        """
+        return cho_solve((self.mass_cho, self._mass_cho_lower), rhs)
+
+    def compute_integral_against_basis(self, f):
         """
         Compute the integral of a function against all basis functions of the cell.
 
@@ -797,7 +816,7 @@ class HHO_cell:
         return self._reconstruction_stiffness_cho
     
     def _build_reconstruction_stiffness_cho(self):
-        self._reconstruction_stiffness_cho, self._reconstruction_stiffness_cho_lower = cho_factor(self.reconstruction_stiffness_matrix, overwrite_a=True)
+        self._reconstruction_stiffness_cho, self._reconstruction_stiffness_cho_lower = cho_factor(self.reconstruction_stiffness_matrix)
         
     @property 
     def reconstruction_source(self):
@@ -863,18 +882,19 @@ class HHO_cell:
     def reconstruction_matrix(self):
         """Matrix to compute the reconstruction from the HHO cell and face unknowns."""
         if self._reconstruction_matrix is None:
-            self._build_reconstruction_matrix()
-        return self._reconstruction_matrix
+            self._reconstruction_matrix = cho_solve((self.reconstruction_stiffness_cho, self._reconstruction_stiffness_cho_lower), 
+                                                     self.reconstruction_source)
+        return self._reconstruction_matrix        
 
-    def _build_reconstruction_matrix(self):
-        lower = self._reconstruction_stiffness_cho_lower
-        if lower:
-            K = self.reconstruction_stiffness_cho
-        else:
-            K = self.reconstruction_stiffness_cho.T
-        H = self.reconstruction_source
-        Y = solve_tr(K, H, lower=True)
-        self._reconstruction_matrix = solve_tr(K.T, Y, lower=False)
+    @property 
+    def cell_reconstruction(self):
+        """HHO cell on the same domain but with the degree of the reconstruction space. """
+        if self._cell_reconstruction is None:
+            if self.degree == self.degree_reconstruction:
+                self._cell_reconstruction = self
+            else:
+                self._cell_reconstruction = HHO_cell(self.x_left, self.x_right, self.degree_reconstruction)
+        return self._cell_reconstruction
 
     def compute_reconstruction(self, dofs):
         """
@@ -895,8 +915,7 @@ class HHO_cell:
             gradient = (dofs[-1]-dofs[-2])/self.h
             r = lambda x: dofs[0] + gradient*(x-self.barycenter)
             # We need to manually project the reconstruction on the reconstruction space
-            cell_reconstruction = HHO_cell(self.x_left, self.x_right, self.degree_reconstruction)
-            return cell_reconstruction.compute_L2_projection(r)
+            return self.cell_reconstruction.compute_L2_projection(r)
         else:
             # solve_reconstruction
             rhs = self.reconstruction_source @ dofs
@@ -923,24 +942,46 @@ class HHO_cell:
 
     def _build_stabilization_matrix(self):
         ###
-        ### Penalty on the jump between the trace on the faces and the face unknowns
+        ### Penalty on the jump between the cell and trace unknowns
         ###
         stabilization = np.zeros((self.number_faces, self.degree+1+self.number_faces))
-        face_coordinates = [self.x_left, self.x_right]
-        for k in range(self.number_faces):
-            # Subtract DOF at the face
-            stabilization[k,self.degree+1+k] = -1
-            # Add volume contribution at the face
-            basis, _ = self.evaluate_basis(face_coordinates[k])
-            stabilization[k,:self.degree+1] = basis
+        face_coordinates = np.array([self.x_left, self.x_right])
+        basis, _ = self.evaluate_basis(face_coordinates)
+        # Subtract DOF at the face
+        stabilization[:,self.degree+1:] = -1
+        # Add volume contribution at the face
+        stabilization[:,:self.degree+1] = basis
         ###
         ### Penalty on the high-order reconstruction
         ###
+        # Note that we can neglect the contribution to the stabilization of the
+        # constant basis function in the reconstruction for self.degree >= 1
         #
-        # ... to be completed ...
+        # Evaluate basis of the reconstruction space
+        basis_rec, _ = self.evaluate_basis(face_coordinates, degree=self.degree_reconstruction)
+        # Drop constant basis function
+        basis_rec = basis_rec[:,1:]
+        # Compute contribution to stabilization matrix
+        S_rec = basis_rec @ self.reconstruction_matrix
+        stabilization += S_rec
+        # Compute transfer matrix from reconstruction to projection on the cell
+        quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
+        basis_on_cell, _ = self.evaluate_basis(quad_points)
+        basis_rec_on_cell, _ = self.evaluate_basis(quad_points, degree=self.degree_reconstruction)
+        # Drop constant basis function from reconstruction space basis
+        basis_rec_on_cell = basis_rec_on_cell[:,1:]
+        # Prepare bases vectors for multiplication
+        basis_on_cell = basis_on_cell[:,:,None] 
+        basis_rec_on_cell = basis_rec_on_cell[:,None,:]
+        transfer = np.einsum('ijk,ikl->ijl', basis_on_cell, basis_rec_on_cell)
+        # Compute transfer matrix by integration
+        transfer = np.einsum('i,ijk->jk', quad_weights, transfer)
+        # Compute contribution to stabilization matrix
+        S_proj_rec = transfer @ self.reconstruction_matrix
+        S_proj_rec = self.compute_L2_projection_from_rhs(S_proj_rec)
+        S_proj_rec = basis @ S_proj_rec
+        stabilization -= S_proj_rec
         #
-        warnings.warn("Add final stabilization contribution.")
-
         self._stabilization_matrix = stabilization
 
     @property 
@@ -962,7 +1003,6 @@ class HHO_cell:
         self._local_cho = None
         self._local_cho_lower = None
 
-    
     @property 
     def local_cho(self):
         """Cholesky decomposition of local_matrix."""
