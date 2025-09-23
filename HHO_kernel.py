@@ -173,7 +173,7 @@ class HHO_kernel:
 
         Changing the source term ensures the right-hand side of the linear system is recomputed.
         """
-        assert self._source is not None, "Right-hand side is requiested but has not yet been set."
+        assert self._source is not None, "Right-hand side is required but has not yet been set."
         return self._source
     
     @source.setter
@@ -200,14 +200,34 @@ class HHO_kernel:
                 Source term of the Poisson equation.
                 Should accept an ndarray and return an ndarray of the same size 
         """
+        transmission_rhs = np.zeros(self.nb_face_unknowns)
         if self.cell_degree == 0:
             # Compute approximation of the average value of f
-            transmission_rhs = np.zeros(self.nb_face_unknowns)
             f_half_average = 0.5 * self.spacing * (f(self.points[0:-1]) + f(self.points[1:]))/2.0
             transmission_rhs[0:-1] = f_half_average 
             transmission_rhs[1:] = transmission_rhs[1:] + f_half_average
         else:
-            raise ValueError("Source term can only be discretized for cell degree 0.")
+            # We do NOT reconstruct the global problem from the local problems as follows
+            # for i in range(self.nb_cells):
+            #     cell = self.cells[i]
+            #     rhs = cell.compute_integral_against_basis(f)
+            #     rhs = cho_solve((cell.local_cho, cell._local_cho_lower), rhs, overwrite_b=False)
+            #     rhs = cell.reconstruction_source[-cell.number_faces:,:cell.degree+1] @ rhs
+            #     i_faces = [i, i+1]
+            #     transmission_rhs[i_faces] -= rhs
+            #
+            # We should directly integrate f in the 1D case
+            for (i,cell) in enumerate(self.cells):
+                quad_degree = int(np.ceil((self.cell_degree)/2)) + 1
+                quad_points, quad_weights = cell.quadrature(quad_degree)
+                for k in range(cell.number_faces):
+                    if k == 0:
+                        test = lambda x: 1 - (x - cell.x_left)/cell.h 
+                    elif k==1:
+                        test = lambda x: 1 + (x - cell.x_right)/cell.h 
+                    else:
+                        raise RuntimeError("Only 2 faces are supported for 1D HHO.")
+                    transmission_rhs[i+k] += np.dot(quad_weights, test(quad_points)*f(quad_points))
         self._transmission_rhs = transmission_rhs
     
     @property 
@@ -557,7 +577,7 @@ class HHO_cell:
             # Contribution of the source term of the PDE to the local problem
             rhs_volume = self.compute_integral_against_basis(source)
             # Contribution of the face unknowns to the local problem
-            rhs_face = self.local_matrix @ np.concatenate([np.zeros(self.degree+1), solution_faces])
+            rhs_face = self.local_matrix[:,-self.number_faces:] @ solution_faces
             rhs_face = rhs_face[0:-self.number_faces]
             # Build total RHS and solve local problem
             rhs = rhs_volume - rhs_face

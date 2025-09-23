@@ -113,6 +113,9 @@ def test_HHO_convergence(computation, **kwargs):
             solver = HHO_kernel(grid_N, k_test)
             error_L2_norm = 0
             error_H1_norm = 0
+            if computation == "Poisson solve":
+                solver.boundary_conditions = 'DD'
+                solver.solve(neg_ddf, f(x_left), f(x_right)) 
             for c in solver.cells:
                 # Define quadrature to compute the error
                 quad_error_x, quad_error_w = c.quadrature((c.degree+2))
@@ -120,9 +123,13 @@ def test_HHO_convergence(computation, **kwargs):
                 match computation:
                     case "L2 projection":
                         f_basis, f_gradient = c.evaluate_fun(quad_error_x, c.compute_L2_projection(f), c.degree)
-                    case "Reconstruction":
-                        # Compute DOFs of f in the discrete HHO space on the cell
-                        dofs = np.concatenate((c.compute_L2_projection(f), [f(c.x_left), f(c.x_right)]))
+                    case "Reconstruction" | "Poisson solve":
+                        match computation:
+                            case "Reconstruction":
+                                # Compute DOFs of f in the discrete HHO space on the cell
+                                dofs = np.concatenate((c.compute_L2_projection(f), [f(c.x_left), f(c.x_right)]))
+                            case "Poisson solve":
+                                dofs = np.concatenate((c.solution, c.solution_faces))
                         f_basis, f_gradient = c.evaluate_fun(quad_error_x, c.compute_reconstruction(dofs), c.degree_reconstruction)
                 # Compute norm of error
                 error_L2_x = f_basis - f(quad_error_x)
@@ -156,6 +163,14 @@ def test_HHO_convergence(computation, **kwargs):
                         case "H1":
                             convergence_order_theory = k_test+1
                             label = r"$\|| u - R_H(\hat{\Pi}^k_H u) ||_{H^1(\Omega)}$"
+                case "Poisson solve":
+                    match norm:
+                        case "L2":
+                            convergence_order_theory = k_test+2
+                            label = r"$\|| u - u_H ||_{L^2(\Omega)}$"
+                        case "H1":
+                            convergence_order_theory = k_test+1
+                            label = r"$\|| u - u_H ||_{H^1(\Omega)}$"
             # Plot errors
             ax.plot(1.0/N_cells, errors, '*-', linewidth=0.8, label=label)
             # Compute straight line that indicates the theoretical convergence order
