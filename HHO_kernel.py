@@ -920,14 +920,13 @@ class HHO_cell:
             # solve_reconstruction
             rhs = self.reconstruction_source @ dofs
             reconstruction = cho_solve((self.reconstruction_stiffness_cho, self._reconstruction_stiffness_cho_lower), rhs, overwrite_b=True)
-            # Compute the coefficient in front of the constant basis function to set the average of the reconstruction
+            # Compute current integral of the reconstruction (without the constant function)
             quad_average_x, quad_average_w = self.quadrature(self.degree_reconstruction+1)
             basis_r, _ = self.evaluate_basis(quad_average_x, self.degree_reconstruction)
-            # Compute current integral of the reconstruction (without the constant function)
             integral_r = np.dot(basis_r[:,1:] @ reconstruction, quad_average_w)
             # Compute integral of the constant basis function
             integral0 = np.dot(basis_r[:,0], quad_average_w)
-            # Compute integral of the function given by the DOFs
+            # Compute integral of the function described by the DOFs
             integral_dof = np.dot(basis_r[:,:-1] @ dofs[:-self.number_faces], quad_average_w)
             # Compute coefficient in front of the constant basis function
             c0 = np.array((integral_dof - integral_r)/integral0, ndmin=1)
