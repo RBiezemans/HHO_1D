@@ -429,7 +429,7 @@ class HHO_cell:
             Cholesky decomposition of local_matrix without the face unknowns.
     """
 
-    def __init__(self, x_left, x_right, degree, basis="Monomial", stabilization=0):
+    def __init__(self, x_left, x_right, degree, basis="Monomial", stabilization=1):
         """
         Define parameters for local cell problem.
 
@@ -441,14 +441,16 @@ class HHO_cell:
                 Right vertex of the cell.
             degree : int
                 Polynomial degree of the cell unknowns.
-            basis : str
+            basis : str, optional
                 Description of the basis functions to be used (case-insensitively). Allowed values are:
                 - "monomial" corresponds to the monomial basis.
-                - "legendre" corresponds to the Legendre basis
-            stabilization : int
+                - "legendre" corresponds to the Legendre basis.
+                Defaults to "Monomial"
+            stabilization : int, optional
                 Option to select the desired type of stabilization. Allowed values are:
                 - 0, to penalize only the difference between cell unknowns and face unknowns at the boundary.
                 - 1, to add penalization for the higher-order reconstruction.
+                Defaults to 1.
             
         Raises
         ------
