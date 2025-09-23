@@ -795,9 +795,6 @@ class HHO_cell:
             f : callable
                 Function to be integrated
                 Should accept an ndarray and return an ndarray of the same size.
-            quad_degree : int | None, default = None
-                Degree of the quadrature rule to compute the integrals.
-                When None, self._quad_degree is used.
 
         Returns
         -------
@@ -974,7 +971,7 @@ class HHO_cell:
         face_coordinates = np.array([self.x_left, self.x_right])
         basis, _ = self.evaluate_basis(face_coordinates)
         # Subtract DOF at the face
-        stabilization[:,self.degree+1:] = -1
+        stabilization[:,self.degree+1:] = -1*np.eye(self.number_faces)
         # Add volume contribution at the face
         stabilization[:,:self.degree+1] = basis
         if self.stabilization_type == 1:
