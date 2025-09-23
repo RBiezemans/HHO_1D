@@ -385,6 +385,14 @@ class HHO_cell:
             length of the cell.
         degree : int
             Polynomial degree of the cell unknowns.
+        basis_type : str
+            Description of the basis functions to be used. Allowed values are:
+            - "monomial" corresponds to the monomial basis.
+            - "legendre" corresponds to the Legendre basis.
+        stabilization_type : int
+            Selection of way of stabilization. Allowed values are:
+            - 0, to penalize only the difference between cell unknowns and face unknowns at the boundary.
+            - 1, to add penalization for the higher-order reconstruction.
         solution : ndarray
             Solution to the local problem on the cell in the polynomial basis.
         solution_faces : ndarray
@@ -421,7 +429,7 @@ class HHO_cell:
             Cholesky decomposition of local_matrix without the face unknowns.
     """
 
-    def __init__(self, x_left, x_right, degree):
+    def __init__(self, x_left, x_right, degree, basis="Monomial", stabilization=0):
         """
         Define parameters for local cell problem.
 
@@ -433,6 +441,19 @@ class HHO_cell:
                 Right vertex of the cell.
             degree : int
                 Polynomial degree of the cell unknowns.
+            basis : str
+                Description of the basis functions to be used (case-insensitively). Allowed values are:
+                - "monomial" corresponds to the monomial basis.
+                - "legendre" corresponds to the Legendre basis
+            stabilization : int
+                Option to select the desired type of stabilization. Allowed values are:
+                - 0, to penalize only the difference between cell unknowns and face unknowns at the boundary.
+                - 1, to add penalization for the higher-order reconstruction.
+            
+        Raises
+        ------
+        ValueError  
+            If basis is not 
         """
         if not x_left < x_right:
             raise ValueError("Left vertex of cell must be smaller than the right vertex.")
@@ -445,6 +466,13 @@ class HHO_cell:
         self._cell_reconstruction = None
             # polynomial degree of the space for the reconstruction of the potential
         self.number_faces = 2
+
+        if basis.lower() not in ["monomial", "legendre"]:
+            raise ValueError(f"Unsupported basis type for the cell space ({basis}).")
+        self.basis_type = basis.lower()
+        if stabilization not in [0,1]:
+            raise ValueError(f"Unsupported choice for stabilization ({basis} instead of 0 or 1).")
+        self.stabilization_type = stabilization
 
         self._solution = None
         self._solution_faces = None
@@ -643,26 +671,25 @@ class HHO_cell:
             h_reference = 2.0
             points_scaled = (points-self.barycenter)*h_reference/self.h
             #
-            # Monomial basis
-            powers = np.arange(0,degree+1)
-            # Reshape points and powers to take advantage of numpy broadcasting
-            points_scaled = points_scaled[:, None]
-            powers = powers[None, :]
-            # Compute value of the basis functions
-            basis_value = points_scaled ** powers
-            # Compute value of the derivatives
-            gradient_value = np.zeros((N_points,degree+1)) 
-            # The derivative of the first basis function is zero everywhere
-            gradient_value[:,1:] = (points_scaled[:] ** powers[:,:-1]) * (powers[0,1:] * h_reference/self.h)
-            #
-            # Legendre 
-            # basis_value = np.zeros((N_points,degree+1))
-            # gradient_value = np.zeros(basis_value.shape)
-            # for i in range(degree+1):
-            #     basis_value[:,i] = sp_fn.eval_legendre(i, points_scaled)
-            #     gradient = sp_fn.legendre(i).deriv()
-            #     gradient_value[:,i] = gradient(points_scaled)
-            #
+            match self.basis_type:
+                case "monomial":
+                    powers = np.arange(0,degree+1)
+                    # Reshape points and powers to take advantage of numpy broadcasting
+                    points_scaled = points_scaled[:, None]
+                    powers = powers[None, :]
+                    # Compute value of the basis functions
+                    basis_value = points_scaled ** powers
+                    # Compute value of the derivatives
+                    gradient_value = np.zeros((N_points,degree+1)) 
+                    # The derivative of the first basis function is zero everywhere
+                    gradient_value[:,1:] = (points_scaled[:] ** powers[:,:-1]) * (powers[0,1:] * h_reference/self.h)
+                case "legendre":
+                    basis_value = np.zeros((N_points,degree+1))
+                    gradient_value = np.zeros(basis_value.shape)
+                    for i in range(degree+1):
+                        basis_value[:,i] = sp_fn.eval_legendre(i, points_scaled)
+                        gradient = sp_fn.legendre(i).deriv()
+                        gradient_value[:,i] = gradient(points_scaled)*h_reference/self.h
         return basis_value, gradient_value
     
     def evaluate_fun(self, points, f, degree = None):
@@ -950,37 +977,37 @@ class HHO_cell:
         stabilization[:,self.degree+1:] = -1
         # Add volume contribution at the face
         stabilization[:,:self.degree+1] = basis
-        ###
-        ### Penalty on the high-order reconstruction
-        ###
-        # Note that we can neglect the contribution to the stabilization of the
-        # constant basis function in the reconstruction for self.degree >= 1
-        #
-        # Evaluate basis of the reconstruction space
-        basis_rec, _ = self.evaluate_basis(face_coordinates, degree=self.degree_reconstruction)
-        # Drop constant basis function
-        basis_rec = basis_rec[:,1:]
-        # Compute contribution to stabilization matrix
-        S_rec = basis_rec @ self.reconstruction_matrix
-        stabilization += S_rec
-        # Compute transfer matrix from reconstruction to projection on the cell
-        quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
-        basis_on_cell, _ = self.evaluate_basis(quad_points)
-        basis_rec_on_cell, _ = self.evaluate_basis(quad_points, degree=self.degree_reconstruction)
-        # Drop constant basis function from reconstruction space basis
-        basis_rec_on_cell = basis_rec_on_cell[:,1:]
-        # Prepare bases vectors for multiplication
-        basis_on_cell = basis_on_cell[:,:,None] 
-        basis_rec_on_cell = basis_rec_on_cell[:,None,:]
-        transfer = np.einsum('ijk,ikl->ijl', basis_on_cell, basis_rec_on_cell)
-        # Compute transfer matrix by integration
-        transfer = np.einsum('i,ijk->jk', quad_weights, transfer)
-        # Compute contribution to stabilization matrix
-        S_proj_rec = transfer @ self.reconstruction_matrix
-        S_proj_rec = self.compute_L2_projection_from_rhs(S_proj_rec)
-        S_proj_rec = basis @ S_proj_rec
-        stabilization -= S_proj_rec
-        #
+        if self.stabilization_type == 1:
+            ###
+            ### Penalty on the high-order reconstruction
+            ###
+            # Note that we can neglect the contribution to the stabilization of the
+            # constant basis function in the reconstruction for self.degree >= 1
+            #
+            # Evaluate basis of the reconstruction space
+            basis_rec, _ = self.evaluate_basis(face_coordinates, degree=self.degree_reconstruction)
+            # Drop constant basis function
+            basis_rec = basis_rec[:,1:]
+            # Compute contribution to stabilization matrix
+            S_rec = basis_rec @ self.reconstruction_matrix
+            stabilization += S_rec
+            # Compute transfer matrix from reconstruction to projection on the cell
+            quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
+            basis_on_cell, _ = self.evaluate_basis(quad_points)
+            basis_rec_on_cell, _ = self.evaluate_basis(quad_points, degree=self.degree_reconstruction)
+            # Drop constant basis function from reconstruction space basis
+            basis_rec_on_cell = basis_rec_on_cell[:,1:]
+            # Prepare bases vectors for multiplication
+            basis_on_cell = basis_on_cell[:,:,None] 
+            basis_rec_on_cell = basis_rec_on_cell[:,None,:]
+            transfer = np.einsum('ijk,ikl->ijl', basis_on_cell, basis_rec_on_cell)
+            # Compute transfer matrix by integration
+            transfer = np.einsum('i,ijk->jk', quad_weights, transfer)
+            # Compute contribution to stabilization matrix
+            S_proj_rec = transfer @ self.reconstruction_matrix
+            S_proj_rec = self.compute_L2_projection_from_rhs(S_proj_rec)
+            S_proj_rec = basis @ S_proj_rec
+            stabilization -= S_proj_rec
         self._stabilization_matrix = stabilization
 
     @property 
