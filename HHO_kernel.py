@@ -369,7 +369,7 @@ class HHO_kernel:
         """
         if len(args)==0:
             args = ("faces", "cells", "reconstruction")
-        args = (arg.lower() for arg in args)
+        args = [arg.lower() for arg in args]
         # Plot solution at the faces
         if "faces" in args:
             ax.plot(self.points, 
@@ -434,14 +434,6 @@ class HHO_cell:
             Solution at the faces of the cell, ordered from left to right.
         solution_reconstruction
             Reconstruction of the solution to the local problem on the cell in the polynomial basis.
-        plot_margin : ndarray
-            Margin around the faces that is used for visualization of the discontinuous solution.
-        points_plot : ndarray
-            Points in the cell used to plot the cell solution.
-        solution_plot : ndarray
-            Representation of the solution in the cell on points_plot.
-        reconstruction_plot : ndarray
-            Representation of the potential reconstruction in the cell on points_plot.
         mass_matrix : ndarray
             Mass matrix of the polynomial basis of degree self.degree on the cell.
         mass_cho : scipy.lingal.cho_factor
@@ -516,12 +508,7 @@ class HHO_cell:
         self._solution = None
         self._solution_faces = None
         self._solution_reconstruction = None
-
-        self.plot_margin = self.h * 1E-5
-        self._points_plot = None
-        self._solution_plot = None
-        self._reconstruction_plot = None
-
+        
         # Matrices for the discrete cell problem
         self._quad_degree_mass = self.degree+1
         self._mass_matrix = None
@@ -614,52 +601,7 @@ class HHO_cell:
         self._solution = solution
         self._solution_faces = solution_faces
         self._solution_reconstruction = self.compute_reconstruction(np.concatenate([self.solution, self.solution_faces]))
-        self._solution_plot = None
-        self._reconstruction_plot = None
-
-    @property
-    def points_plot(self):
-        """Points in the cell used to plot the cell solution."""
-        if self._points_plot is None:
-            self._build_points_plot()
-        return self._points_plot
-    
-    def _build_points_plot(self):
-        if self.degree == 0:
-            points_plot = np.array([self.x_left+self.plot_margin, self.x_right-self.plot_margin])
-        else:
-            raise ValueError("Plot of cell solutions has only been implemented for cell degree 0.")
-        self._points_plot = points_plot
-
-    @property 
-    def solution_plot(self):
-        """Representation of the solution in the cell on points_plot."""
-        if self._solution_plot is None:
-            self._build_solution_plot()
-        return self._solution_plot
-    
-    def _build_solution_plot(self):
-        if self.degree == 0:
-            solution_plot = self.solution * np.ones(len(self.points_plot))
-        else:
-            raise ValueError("Plot of cell solutions has only been implemented for cell degree 0.")
-        self._solution_plot = solution_plot
-    
-    @property
-    def reconstruction_plot(self):
-        """Representation of the potential reconstruction in the cell on points_plot."""
-        if self._reconstruction_plot is None:
-            self._build_reconstruction_plot()
-        return self._reconstruction_plot
-    
-    def _build_reconstruction_plot(self):
-        if self.degree == 0:
-            dofs = np.concatenate([self.solution, self.solution_faces])
-            r = self.compute_reconstruction(dofs)
-            self._reconstruction_plot, _ = self.evaluate_fun(self._points_plot, r, self.degree_reconstruction)
-        else:
-            raise ValueError("Local problems have only been implemented for cell degree 0.")
-    
+        
     def quadrature(self, deg):
         """
         Compute the sample points and weights for Gauss-Legendre quadrature on the cell.
