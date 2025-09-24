@@ -21,6 +21,10 @@ class HHO_kernel:
             Number of cells of the discrete domain.
         cell_degree : int
             Polynomial degree of the cell unknowns.
+        basis_type : str
+                Description of the basis functions to be used (case-insensitively). Allowed values are:
+                - "monomial" corresponds to the monomial basis.
+                - "legendre" corresponds to the Legendre basis.
         cells : list of HHO_cell
             Discretization and solution of all the cell problems.
         boundary_conditions : str
@@ -41,7 +45,7 @@ class HHO_kernel:
             Solution vector of the transmission problem.
     """
 
-    def __init__(self, x, degree=0):
+    def __init__(self, x, degree=0, basis="Monomial"):
         """
         Initialize HHO kernel: define parameters of the grid and the cell degree.
 
@@ -50,6 +54,11 @@ class HHO_kernel:
                 vertices of the discrete domain
             degree : int, default = 0
                 polynomial degree of the cell unknowns
+            basis : str, optional
+                Description of the basis functions to be used (case-insensitively). Allowed values are:
+                - "monomial" corresponds to the monomial basis.
+                - "legendre" corresponds to the Legendre basis.
+                Defaults to "Monomial"
         """
         self.points = x
         self.spacing = x[1:] - x[0:-1]
@@ -57,9 +66,13 @@ class HHO_kernel:
         self.nb_face_unknowns = len(self.points)
         self.nb_cells = self.nb_face_unknowns-1
         self.cell_degree = degree
+        self.basis_type = basis
 
         # Initialize cells problems
-        self.cells = [HHO_cell(self.points[i], self.points[i+1], self.cell_degree) 
+        self.cells = [HHO_cell(self.points[i], 
+                               self.points[i+1], 
+                               self.cell_degree, 
+                               self.basis_type) 
                       for i in range(self.nb_face_unknowns-1)]
 
         # Initialize quantities related to the linear system to unset state
@@ -267,7 +280,6 @@ class HHO_kernel:
                 If the boundary conditions described by bc_left, bc_right and average do not correspond to self.boundary_conditions settings.
         """
         self.source = f
-        self._solution_face = None
         for ibc in range(2):
             bc_check, side = (bc_left, "left") if ibc==0 else (bc_right, "right")
             match self.boundary_conditions[ibc]:
@@ -366,11 +378,13 @@ class HHO_kernel:
                     markersize=10, 
                     markeredgewidth=1, 
                     label="HHO \u2014 faces")
+        N_plot_cell = 30
         # Plot solution at the cells
         if "cells" in args:
             for i, cell in enumerate(self.cells):
-                plt_solution, = ax.plot(cell.points_plot, 
-                                        cell.solution_plot, 
+                xx = np.linspace(cell.x_left, cell.x_right, N_plot_cell + cell.degree)
+                sol_xx, _ = cell.evaluate_solution(xx)
+                plt_solution, = ax.plot(xx, sol_xx,
                                         color='#1f77b4', 
                                         linewidth=2)
                 if i == 0:
@@ -378,10 +392,11 @@ class HHO_kernel:
         # Plot reconstructed potential in the higher-order space
         if "reconstruction" in args:
             for i, cell in enumerate(self.cells):
-                plt_reconstruction, = ax.plot(cell.points_plot,
-                                            cell.reconstruction_plot,
-                                            color='orange', 
-                                            linewidth=2)
+                xx = np.linspace(cell.x_left, cell.x_right, N_plot_cell + cell.degree_reconstruction)
+                rec_xx, _ = cell.evaluate_reconstruction(xx)
+                plt_reconstruction, = ax.plot(xx, rec_xx,
+                                              color='orange', 
+                                              linewidth=2)
                 if i == 0:
                     plt_reconstruction.set_label("HHO \u2014 reconstruction")
         ax.set_title(f"Approximation by HHO method (degree {self.cell_degree})")
@@ -417,6 +432,8 @@ class HHO_cell:
             Solution to the local problem on the cell in the polynomial basis.
         solution_faces : ndarray
             Solution at the faces of the cell, ordered from left to right.
+        solution_reconstruction
+            Reconstruction of the solution to the local problem on the cell in the polynomial basis.
         plot_margin : ndarray
             Margin around the faces that is used for visualization of the discontinuous solution.
         points_plot : ndarray
@@ -498,6 +515,7 @@ class HHO_cell:
 
         self._solution = None
         self._solution_faces = None
+        self._solution_reconstruction = None
 
         self.plot_margin = self.h * 1E-5
         self._points_plot = None
@@ -547,6 +565,16 @@ class HHO_cell:
         assert self._solution_faces is not None, "Solution at the cell faces is unknown."
         return self._solution_faces
 
+    @property 
+    def solution_reconstruction(self):
+        """
+        Reconstruction of the solution to the local problem on the cell in the polynomial basis.
+
+        Can only be set through HHO_cell.solve().
+        """
+        assert self._solution_reconstruction is not None, "Solution to local problem has not yet been computed."
+        return self._solution_reconstruction
+
     def solve(self, source, sol_global_left, sol_global_right):
         """
         Solve local problem based on the source term and the solution to the global solution on both faces of the cell.
@@ -570,9 +598,10 @@ class HHO_cell:
             # 2nd order approximation of the average of the source
             # source_average = self.h * (source(self.x_left) + source(self.x_right))/2.0
             solution = 0.5 * self.h**2 * source_average + 0.5*(sol_global_left + sol_global_right)
+            solution = np.reshape(solution,(1))
             # Rescale by the value of the constant basis function in case it might not be 1
             value_basis, _ = self.evaluate_basis(self.barycenter)
-            solution = solution/value_basis
+            solution = solution/value_basis[0,0]
         else:
             # Contribution of the source term of the PDE to the local problem
             rhs_volume = self.compute_integral_against_basis(source)
@@ -584,6 +613,7 @@ class HHO_cell:
             solution = cho_solve((self.local_cho, self._local_cho_lower), rhs, overwrite_b=True)
         self._solution = solution
         self._solution_faces = solution_faces
+        self._solution_reconstruction = self.compute_reconstruction(np.concatenate([self.solution, self.solution_faces]))
         self._solution_plot = None
         self._reconstruction_plot = None
 
@@ -685,8 +715,8 @@ class HHO_cell:
             points = np.reshape(points,(1,1))
 
         if degree == 0:
-            basis_value = np.ones(len(points))
-            gradient_value = np.zeros(len(points))
+            basis_value = np.ones((len(points),1))
+            gradient_value = np.zeros((len(points),1))
         else:
             N_points = len(points)
             # Rescale evaluation points to the refernce cell (-1,1)
@@ -737,6 +767,42 @@ class HHO_cell:
         """
         basis, gradient = self.evaluate_basis(points, degree)
         return basis @ f, gradient @ f
+
+    def evaluate_solution(self, points):
+        """
+        Evaluate the cell unknowns of the HHO solution and the corresponding gradient.
+
+        Parameters
+        ----------
+            points : ndarray
+                The points in which the basis is to be evaluated.
+
+        Returns
+        -------
+        ndarray
+            Values of the solution at the given points.
+        ndarray
+            Values of the gradient of the solution at the given points.
+        """
+        return self.evaluate_fun(points, self.solution)
+
+    def evaluate_reconstruction(self, points):
+        """
+        Evaluate the reconstruction corresponding to the HHO solution and its gradient.
+
+        Parameters
+        ----------
+            points : ndarray
+                The points in which the basis is to be evaluated.
+
+        Returns
+        -------
+        ndarray
+            Values of the reconstruction at the given points.
+        ndarray
+            Values of the gradient of the reconstruction at the given points.
+        """
+        return self.cell_reconstruction.evaluate_fun(points, self.solution_reconstruction)
     
     @property 
     def mass_matrix(self):
@@ -939,7 +1005,7 @@ class HHO_cell:
             if self.degree == self.degree_reconstruction:
                 self._cell_reconstruction = self
             else:
-                self._cell_reconstruction = HHO_cell(self.x_left, self.x_right, self.degree_reconstruction)
+                self._cell_reconstruction = HHO_cell(self.x_left, self.x_right, self.degree_reconstruction, self.basis_type)
         return self._cell_reconstruction
 
     def compute_reconstruction(self, dofs):
