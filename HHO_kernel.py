@@ -5,6 +5,8 @@ from scipy.linalg import cho_factor, cho_solve
 from scipy.linalg import solve_triangular as solve_tr
 import warnings 
 
+from utils import resettable_lazy_property
+
 class HHO_kernel:
     """
     Object with the functionality to build the matrix and vector of the discrete linear system.
@@ -100,24 +102,16 @@ class HHO_kernel:
             self._boundary_conditions = bc
             self._transmission_system = None
 
-    @property 
+    @resettable_lazy_property 
     def transmission_system(self):
         """
         Matrix for the global problem including boundary conditions through Lagrange multipliers.
 
-        The LU decomposition is actually stored, in SciPy SparseLU format (scipy.sparse.linalg.splu)
-        It is automatically recomputed when the boundary conditions are modified.
-        """
-        if self._transmission_system is None:
-            self._build_transmission_system()
-        return self._transmission_system
-
-    def _build_transmission_system(self):
-        """
-        Assemble the linear system for the transmission matrix.
-        
         The matrix of the homogeneous Neumann problem is precomputed (self.transmission_matrix).
         Dirichlet boundary conditions/average condition are set with Lagrange multipliers.
+
+        The LU decomposition is actually stored, in SciPy SparseLU format (scipy.sparse.linalg.splu)
+        It is automatically recomputed when the boundary conditions are modified.
         """
         if self.boundary_conditions[0] == 'D':
             dirichlet_left = np.zeros(self.nb_face_unknowns)
@@ -140,16 +134,11 @@ class HHO_kernel:
                 A = sp.block_array([[self.transmission_matrix, dirichlet_left.T, dirichlet_right.T], [dirichlet_left, None, None], [dirichlet_right, None, None]], format='csc')
             case _:
                 raise ValueError(f"Unsupported boundary conditions [{self.boundary_conditions}] for global transmission problem.")
-        self._transmission_system = sp.linalg.splu(A)
+        return sp.linalg.splu(A)
 
-    @property
+    @resettable_lazy_property
     def transmission_matrix(self):
         """Matrix of the discrete linear system of the global transmission problem with Neumann conditions."""
-        if self._transmission_matrix is None:
-            self._build_transmission_matrix()
-        return self._transmission_matrix
-
-    def _build_transmission_matrix(self):
         # Compute the three nonzero diagonals
         upper_diag = -1/self.spacing 
         lower_diag = upper_diag
@@ -157,16 +146,11 @@ class HHO_kernel:
         diag[:-1] = 1/self.spacing 
         diag[1:] += 1/self.spacing
         # Save the linear system as a sparse matrix
-        self._transmission_matrix = sp.diags_array([upper_diag, diag, lower_diag], offsets=[+1, 0, -1])
+        return sp.diags_array([upper_diag, diag, lower_diag], offsets=[+1, 0, -1])
 
-    @property 
+    @resettable_lazy_property 
     def transmission_average(self):
-        if self._transmission_average is None:
-            self._build_transmission_average()
-        return self._transmission_average
-
-    def _build_transmission_average(self):
-        """Build row vector corresponding to the discrete average over the conforming P1 space."""
+        """Row vector corresponding to the discrete average over the conforming P1 space."""
         # Compute vector corresponding to the whole integral
         average = np.zeros(self.nb_face_unknowns)
         average[0:-1] = self.spacing/2.0
@@ -177,7 +161,7 @@ class HHO_kernel:
         # Make it a row vector
         average = average[np.newaxis]
         # Save in sparse format for compatibilty with sp.block_array
-        self._transmission_average = sp.coo_array(average)
+        return sp.coo_array(average)
 
     @property 
     def source(self):
@@ -194,25 +178,14 @@ class HHO_kernel:
         self._source = f
         self._transmission_rhs = None 
 
-    @property
+    @resettable_lazy_property
     def transmission_rhs(self):
         """
         Discrete right-hand side associated to self.source.
-        """
-        if self._transmission_rhs is None:
-            self._build_transmission_rhs(self.source)
-        return self._transmission_rhs
-        
-    def _build_transmission_rhs(self, f):
-        """
-        Build discrete right-hand side associated to the function f.
 
-        Parameters
-        ----------
-            f : callable
-                Source term of the Poisson equation.
-                Should accept an ndarray and return an ndarray of the same size 
+        It is automatically recomputed when the source term is changed.
         """
+        f = self.source
         transmission_rhs = np.zeros(self.nb_face_unknowns)
         if self.cell_degree == 0:
             # Compute approximation of the average value of f
@@ -241,7 +214,7 @@ class HHO_kernel:
                     else:
                         raise RuntimeError("Only 2 faces are supported for 1D HHO.")
                     transmission_rhs[i+k] += np.dot(quad_weights, test(quad_points)*f(quad_points))
-        self._transmission_rhs = transmission_rhs
+        return transmission_rhs
     
     @property 
     def solution_face(self):
@@ -768,14 +741,8 @@ class HHO_cell:
         """
         return self.cell_reconstruction.evaluate_fun(points, self.solution_reconstruction, *args)
     
-    @property 
+    @resettable_lazy_property 
     def mass_matrix(self):
-        """Mass matrix of the polynomial basis of degree self.degree on the cell."""
-        if self._mass_matrix is None:
-            self._build_mass_matrix()
-        return self._mass_matrix
-    
-    def _build_mass_matrix(self):
         # Evaluate basis functions at the quadrature points
         quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
         basis, _ = self.evaluate_basis(quad_points, "basis")
@@ -784,21 +751,17 @@ class HHO_cell:
         basis_row = basis[:,None,:]
         # Compute basis-basis multiplication
         mass_matrix = np.einsum('ijk,ikl->ijl', basis_column, basis_row)
-        # Integrate mass matrix
-        self._mass_matrix = np.einsum('i,ikl->kl', quad_weights, mass_matrix)
-        # Reset the Cholesky decomposition of the mass matrix
+        # Reset the Cholesky decomposition of the mass matrix before returning
         self._mass_cho = None
         self._mass_cho_lower = None
+        # Integrate mass matrix
+        return np.einsum('i,ikl->kl', quad_weights, mass_matrix)
 
-    @property 
+    @resettable_lazy_property
     def mass_cho(self):
         """Cholesky factorization of the mass matrix of the polynomial basis of degree self.degree on the cell."""
-        if self._mass_cho is None:
-            self._build_mass_cho()
-        return self._mass_cho
-    
-    def _build_mass_cho(self):
-        self._mass_cho, self._mass_cho_lower = cho_factor(self.mass_matrix, overwrite_a=True)
+        mass_cho, self._mass_cho_lower = cho_factor(self.mass_matrix, overwrite_a=True)
+        return mass_cho
 
     def compute_L2_projection(self, f):
         """
@@ -860,14 +823,9 @@ class HHO_cell:
         # Compute integrals
         return np.einsum('i,ik->k', quad_weights, fbasis)
 
-    @property
+    @resettable_lazy_property
     def stiffness_matrix(self):
         """Stiffness matrix on the basis of the cell."""
-        if self._stiffness_matrix is None:
-            self._build_stiffness_matrix()
-        return self._stiffness_matrix
-    
-    def _build_stiffness_matrix(self):
         # Evaluate gradient of the basis functions at the quadrature points
         quad_points, quad_weights = self.quadrature(self.degree)
         _, dbasis = self.evaluate_basis(quad_points, "gradient")
@@ -876,24 +834,23 @@ class HHO_cell:
         dbasis_row = dbasis[:,None,:]
         # Compute basis-basis multiplication
         stiffness = np.einsum('ijk,ikl->ijl', dbasis_column, dbasis_row)
-        # Integrate stiffness matrix
-        self._stiffness_matrix = np.einsum('i,ikl->kl', quad_weights, stiffness)
         # Reset the dependencies of the stiffness matrix
         self._stiffness_matrix_reduced = None
         self._stiffness_reduced_cho = None
         self._stiffness_reduced_cho_lower = None
+        # Integrate stiffness matrix
+        return np.einsum('i,ikl->kl', quad_weights, stiffness)
 
-    @property 
+    @resettable_lazy_property 
     def stiffness_matrix_reduced(self):
         """Stiffness matrix with the constant function removed from the basis."""
         return self.stiffness_matrix[1:,1:]
 
-    @property 
+    @resettable_lazy_property 
     def stiffness_reduced_cho(self):
         """Cholesky factorization of self.stiffness_matrix_reduced."""
-        if self._stiffness_reduced_cho is None:
-            self._stiffness_reduced_cho, self._stiffness_reduced_cho_lower = cho_factor(self.stiffness_matrix_reduced)
-        return self._stiffness_reduced_cho
+        stiffness_reduced_cho, self._stiffness_reduced_cho_lower = cho_factor(self.stiffness_matrix_reduced)
+        return stiffness_reduced_cho
 
     @property 
     def HHO_dofs_to_reconstruction(self):
@@ -905,13 +862,8 @@ class HHO_cell:
             - L2 projections on the left face (i.e., the value in 1D)
             - L2 projections on the right face (i.e., the value in 1D)
         """
-        if self._HHO_dofs_to_reconstruction is None:
-            self._build_HHO_dofs_to_reconstruction()
-        return self._HHO_dofs_to_reconstruction
-    
-    def _build_HHO_dofs_to_reconstruction(self):
         # Initialization 
-        source = np.zeros((self.degree+1, self.degree+1+self.number_faces))
+        HHO_to_rec = np.zeros((self.degree+1, self.degree+1+self.number_faces))
         ###
         ### Integrals over the cell volume
         ###
@@ -930,8 +882,8 @@ class HHO_cell:
         cont = np.einsum('ijk,ikl->ijl', dbasis_rec_column, dbasis_row)
         # Apply quadrature
         cont = np.einsum('i,ikl->kl', quad_weights, cont)
-        ### Store contribution to source
-        source[:,:self.degree+1] = cont
+        ### Store contribution to HHO_to_rec
+        HHO_to_rec[:,:self.degree+1] = cont
         ###
         ### Integrals over the faces
         ###
@@ -946,14 +898,14 @@ class HHO_cell:
         basis_row = basis[:,None,:]
         dbasis_rec_column = dbasis_rec[:,:,None]
         cont = np.einsum('ijk,ikl->ijl', dbasis_rec_column, basis_row)
-        ### Store contributions to source
+        ### Store contributions to HHO_to_rec
         for k in range(len(faces)):
-            source[:,:self.degree+1] -= faces_normal[k] * cont[k,:,:]
+            HHO_to_rec[:,:self.degree+1] -= faces_normal[k] * cont[k,:,:]
         ### Compute (basis,dbasis_rec)_L2(faces), trial function in the face space
         for k in range(len(faces)):
-            source[:,self.degree+1+k] = faces_normal[k] * dbasis_rec_column[k,:,0]
+            HHO_to_rec[:,self.degree+1+k] = faces_normal[k] * dbasis_rec_column[k,:,0]
         ### Done
-        self._HHO_dofs_to_reconstruction = source
+        return HHO_to_rec
     
     @property 
     def reconstruction_matrix(self):
@@ -1008,14 +960,9 @@ class HHO_cell:
             c0 = np.array((integral_dof - integral_r)/integral0, ndmin=1)
             return np.concatenate([c0, reconstruction])
     
-    @property 
+    @resettable_lazy_property 
     def stabilization_matrix(self):
         """Matrix of the stabilization operator."""
-        if self._stabilization_matrix is None:
-            self._build_stabilization_matrix()
-        return self._stabilization_matrix
-
-    def _build_stabilization_matrix(self):
         ###
         ### Penalty on the jump between the cell and trace unknowns
         ###
@@ -1056,16 +1003,11 @@ class HHO_cell:
             S_proj_rec = self.compute_L2_projection_from_rhs(S_proj_rec)
             S_proj_rec = basis @ S_proj_rec
             stabilization -= S_proj_rec
-        self._stabilization_matrix = stabilization
+        return stabilization
 
-    @property 
+    @resettable_lazy_property 
     def local_matrix(self):
         """Matrix of discrete system for the local cell problem including the face unknowns."""
-        if self._local_matrix is None:
-            self._build_local_matrix()
-        return self._local_matrix
-    
-    def _build_local_matrix(self):
         H = self.HHO_dofs_to_reconstruction
         local_matrix = H.T @ self.reconstruction_matrix
         # Stabilization contributions
@@ -1073,18 +1015,16 @@ class HHO_cell:
             S = self.stabilization_matrix[k,:]
             S = S[:,None] @ S[None,:] 
             local_matrix += 1.0/self.h * S
-        self._local_matrix = local_matrix
+        # Reset dependencies of local_matrix to None
         self._local_cho = None
         self._local_cho_lower = None
+        # Return the local matrix
+        return local_matrix
 
     @property 
     def local_cho(self):
         """Cholesky decomposition of local_matrix."""
-        if self._local_cho is None:
-            self._compute_local_cho()
-        return self._local_cho 
-    
-    def _compute_local_cho(self):
-        # The local problem uses homogeneous values for the face unknowns
+        # The local problem uses homogeneous values for the face unknowns so those dofs should be removed from the system
         local_matrix = self.local_matrix[:-self.number_faces,:-self.number_faces]
-        self._local_cho, self._local_cho_lower = cho_factor(local_matrix, overwrite_a=True)
+        local_cho, self._local_cho_lower = cho_factor(local_matrix, overwrite_a=True)
+        return local_cho
