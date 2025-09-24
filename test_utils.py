@@ -105,7 +105,7 @@ def test_HHO_computation(computation: str, pcell: HHO_cell, plot_xx: np.ndarray)
     
     fig.suptitle(f"Example of {computation}s")
 
-def test_HHO_convergence(computation, test_degrees=[0]):
+def test_HHO_convergence(computation, test_degrees=[0], basis="monomial"):
     """
     Make convergence curves for different computations on the cell.
     
@@ -115,6 +115,8 @@ def test_HHO_convergence(computation, test_degrees=[0]):
             "L2 projection" / "Reconstruction" / "Poisson solve"
         test_degree: list[int]
             Cell degrees of the HHO method to compute convergence curves for.
+        basis: str
+            Description of the basis used on the cell.
     """
     x_left = 0
     x_right = 1
@@ -140,7 +142,7 @@ def test_HHO_convergence(computation, test_degrees=[0]):
         errors_H1 = np.zeros(len(N_cells))
         for (i,N) in enumerate(N_cells):
             grid_N = np.linspace(x_left, x_right, N+1)
-            solver = HHO_kernel(grid_N, k_test)
+            solver = HHO_kernel(grid_N, k_test, basis)
             error_L2_norm = 0
             error_H1_norm = 0
             if computation == "Poisson solve":

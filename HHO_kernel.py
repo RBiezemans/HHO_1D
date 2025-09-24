@@ -689,11 +689,14 @@ class HHO_cell:
                     if compute_gradient:
                         gradient_value[:,1:] = (points_scaled[:] ** powers[:,:-1]) * (powers[0,1:] * h_reference/self.h)
                 case "legendre":
+                    nb_basis_functions = degree+1
                     if compute_basis:
-                        basis_value = np.array([sp_fn.eval_legendre(i, points_scaled) for i in range(degree+1)])
-                    if compute_gradient:     
-                        gradient_value = np.zeros(basis_value.shape)
-                        for i in range(degree+1):
+                        basis_value = np.zeros((N_points,nb_basis_functions))
+                        for i in range(nb_basis_functions):
+                            basis_value[:,i] = sp_fn.eval_legendre(i, points_scaled)
+                    if compute_gradient:
+                        gradient_value = np.zeros((N_points,nb_basis_functions))
+                        for i in range(nb_basis_functions):
                             gradient = sp_fn.legendre(i).deriv()
                             gradient_value[:,i] = gradient(points_scaled)*h_reference/self.h
         return basis_value, gradient_value
@@ -719,7 +722,11 @@ class HHO_cell:
             Values of the gradient of the function at the given points if "gradient" is passed in *args, otherwise None.
         """
         basis, gradient = self.evaluate_basis(points, *args)
-        return basis @ f, gradient @ f
+        if basis is not None:
+            basis = basis @ f
+        if gradient is not None:
+            gradient = gradient @ f
+        return basis, gradient
 
     def evaluate_solution(self, points, *args):
         """
@@ -913,11 +920,10 @@ class HHO_cell:
         # We need both the basis functions from the HHO space and the higher-order reconstruction space.
         quad_degree = self.degree
         quad_points, quad_weights = self.quadrature(quad_degree)
-        basis, dbasis = self.evaluate_basis(quad_points)
-        _, dbasis_rec = self.cell_reconstruction.evaluate_basis(quad_points, "gradient")
-            # Note: we're actually evaluating the same basis twice in the above...
-        # Drop gradient of constant basis function in reconstruction space
-        dbasis_rec = dbasis_rec[:,1:]
+        basis_all, dbasis_all = self.cell_reconstruction.evaluate_basis(quad_points)
+        basis = basis_all[:,:self.degree+1]
+        dbasis = dbasis_all[:,:self.degree+1]
+        dbasis_rec = dbasis_all[:,1:] # Drop constant function from the basis of the reconstruction space
         # Compute product of bases
         dbasis_row = dbasis[:,None,:]
         dbasis_rec_column = dbasis_rec[:,:,None]
@@ -1015,7 +1021,8 @@ class HHO_cell:
         ###
         stabilization = np.zeros((self.number_faces, self.degree+1+self.number_faces))
         face_coordinates = np.array([self.x_left, self.x_right])
-        basis, _ = self.evaluate_basis(face_coordinates, "basis")
+        basis_rec, _ = self.cell_reconstruction.evaluate_basis(face_coordinates, "basis")
+        basis = basis_rec[:,:self.degree+1]
         # Subtract DOF at the face
         stabilization[:,self.degree+1:] = -1*np.eye(self.number_faces)
         # Add volume contribution at the face
@@ -1027,17 +1034,15 @@ class HHO_cell:
             # Note that we can neglect the contribution to the stabilization of the
             # constant basis function in the reconstruction for self.degree >= 1
             #
-            # Evaluate basis of the reconstruction space
-            basis_rec, _ = self.cell_reconstruction.evaluate_basis(face_coordinates, "basis")
-            # Drop constant basis function
+            # Drop constant basis function from the reconstruction space
             basis_rec = basis_rec[:,1:]
             # Compute contribution to stabilization matrix
             S_rec = basis_rec @ self.reconstruction_matrix
             stabilization += S_rec
             # Compute transfer matrix from reconstruction to projection on the cell
             quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
-            basis_on_cell, _ = self.evaluate_basis(quad_points, "basis")
             basis_rec_on_cell, _ = self.cell_reconstruction.evaluate_basis(quad_points, "basis")
+            basis_on_cell = basis_rec_on_cell[:,:self.degree+1]
             # Drop constant basis function from reconstruction space basis
             basis_rec_on_cell = basis_rec_on_cell[:,1:]
             # Prepare bases vectors for multiplication
