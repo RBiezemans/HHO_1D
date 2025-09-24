@@ -519,12 +519,10 @@ class HHO_cell:
             # self._mass_cho_lower is a flag indicating whether the factor is in the lower or upper triangle 
             #  returned by scipy.linalg.cho_factor
             # It is not meant to be part of the public interface of the class
-        self._quad_degree_reconstruction = self.degree+1
         self._stiffness_matrix = None
         self._stiffness_matrix_reduced = None
         self._stiffness_reduced_cho = None
         self._stiffness_reduced_cho_lower = None # similar use as self._mass_cho_lower
-        self._quad_degree_reconstruction_source = self.degree
             # on the faces we would need a higher degree for the quadrature,
             # but in 1D integrals over the faces are simply point-wise evaluation
         self._reconstruction_source = None
@@ -631,7 +629,7 @@ class HHO_cell:
         return x, w
 
 
-    def evaluate_basis(self, points, degree=None):
+    def evaluate_basis(self, points):
         """
         Evaluate the basis functions on the cell and their derivatives at prescribed points.
 
@@ -639,9 +637,6 @@ class HHO_cell:
         ----------
             points : ndarray | scalar type
                 The points in which the basis is to be evaluated.
-            degree : int | None, default = None
-                Polynomial degree of the basis to be evaluated.
-                When None, the degree is the value in self.degree.
         
         Returns
         -------
@@ -654,8 +649,7 @@ class HHO_cell:
         ndarray
             Values of the gradient, in the same format as the first output.
         """
-        if degree is None:
-            degree = self.degree
+        degree = self.degree
         if np.isscalar(points) or points.ndim == 0:
             points = np.reshape(points,(1,1))
 
@@ -689,7 +683,7 @@ class HHO_cell:
                         gradient_value[:,i] = gradient(points_scaled)*h_reference/self.h
         return basis_value, gradient_value
     
-    def evaluate_fun(self, points, f, degree = None):
+    def evaluate_fun(self, points, f):
         """
         Evaluate a function given by its coefficients in the basis at prescribed points and its gradient.
 
@@ -699,9 +693,6 @@ class HHO_cell:
                 The points in which the basis is to be evaluated.
             f : ndarray
                 List of coefficients of the function to be evaluated with respect to the basis.
-            degree : int | None, default = None
-                Polynomial degree of the basis to be evaluated.
-                When None, the degree used is the value in self.degree.
 
         Returns
         -------
@@ -710,7 +701,7 @@ class HHO_cell:
         ndarray
             Values of the gradient of the function at the given points.
         """
-        basis, gradient = self.evaluate_basis(points, degree)
+        basis, gradient = self.evaluate_basis(points)
         return basis @ f, gradient @ f
 
     def evaluate_solution(self, points):
@@ -733,7 +724,7 @@ class HHO_cell:
 
     def evaluate_reconstruction(self, points):
         """
-        Evaluate the reconstruction corresponding to the HHO solution and its gradient.
+        Evaluate the reconstruction corresponding to the HHO solution and its gradient in the higher-order space.
 
         Parameters
         ----------
@@ -821,7 +812,7 @@ class HHO_cell:
         """
         Compute the integral of a function against all basis functions of the cell.
 
-        The output appears on the RHS of, e.g., the L2-projection and the reconstruction problem.
+        The output is the source term of e.g. the L2-projection and the reconstruction problem.
 
         Parameters
         ----------
@@ -899,9 +890,10 @@ class HHO_cell:
         ### Compute (dbasis,dbasis_rec)_L2(cell), trial functions in the cell space
         # Evaluate gradient of the basis functions at the quadrature points
         # We need both the basis functions from the HHO space and the higher-order reconstruction space.
-        quad_points, quad_weights = self.quadrature(self._quad_degree_reconstruction_source)
+        quad_degree = self.degree
+        quad_points, quad_weights = self.quadrature(quad_degree)
         basis, dbasis = self.evaluate_basis(quad_points)
-        _, dbasis_rec = self.evaluate_basis(quad_points, self.degree_reconstruction)
+        _, dbasis_rec = self.cell_reconstruction.evaluate_basis(quad_points)
             # Note: we're actually evaluating the same basis twice in the above...
         # Drop gradient of constant basis function in reconstruction space
         dbasis_rec = dbasis_rec[:,1:]
@@ -921,7 +913,7 @@ class HHO_cell:
         faces = np.array((self.x_left, self.x_right))
         faces_normal = np.array([-1,1])
         basis, _ = self.evaluate_basis(faces)
-        _, dbasis_rec = self.evaluate_basis(faces, self.degree_reconstruction)
+        _, dbasis_rec = self.cell_reconstruction.evaluate_basis(faces)
         dbasis_rec = dbasis_rec[:,1:]
         # Compute product of bases
         basis_row = basis[:,None,:]
@@ -979,7 +971,7 @@ class HHO_cell:
             reconstruction = self.reconstruction_matrix @ dofs
             # Compute current integral of the reconstruction (without the constant function)
             quad_average_x, quad_average_w = self.quadrature(self.degree_reconstruction+1)
-            basis_r, _ = self.evaluate_basis(quad_average_x, self.degree_reconstruction)
+            basis_r, _ = self.cell_reconstruction.evaluate_basis(quad_average_x)
             integral_r = np.dot(basis_r[:,1:] @ reconstruction, quad_average_w)
             # Compute integral of the constant basis function
             integral0 = np.dot(basis_r[:,0], quad_average_w)
@@ -1015,7 +1007,7 @@ class HHO_cell:
             # constant basis function in the reconstruction for self.degree >= 1
             #
             # Evaluate basis of the reconstruction space
-            basis_rec, _ = self.evaluate_basis(face_coordinates, degree=self.degree_reconstruction)
+            basis_rec, _ = self.cell_reconstruction.evaluate_basis(face_coordinates)
             # Drop constant basis function
             basis_rec = basis_rec[:,1:]
             # Compute contribution to stabilization matrix
@@ -1024,7 +1016,7 @@ class HHO_cell:
             # Compute transfer matrix from reconstruction to projection on the cell
             quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
             basis_on_cell, _ = self.evaluate_basis(quad_points)
-            basis_rec_on_cell, _ = self.evaluate_basis(quad_points, degree=self.degree_reconstruction)
+            basis_rec_on_cell, _ = self.cell_reconstruction.evaluate_basis(quad_points)
             # Drop constant basis function from reconstruction space basis
             basis_rec_on_cell = basis_rec_on_cell[:,1:]
             # Prepare bases vectors for multiplication
