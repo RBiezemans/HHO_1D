@@ -65,16 +65,16 @@ def test_HHO_computation(computation: str, pcell: HHO_cell, plot_xx: np.ndarray)
         # Compute HHO result according to required input
         match computation:
             case "L2 projection":
-                f_HHO, _ = pcell.evaluate_fun(plot_xx, pcell.compute_L2_projection(f))
+                f_HHO, _ = pcell.evaluate_fun(plot_xx, pcell.compute_L2_projection(f), "basis")
                 label = "f"
             case "Reconstruction":
                 dofs = np.concatenate((pcell.compute_L2_projection(f), [f(xL), f(xR)]))
-                f_HHO, _ = pcell.evaluate_fun(plot_xx, pcell.compute_reconstruction(dofs), pcell.degree_reconstruction)
+                f_HHO, _ = pcell.cell_reconstruction.evaluate_fun(plot_xx, pcell.compute_reconstruction(dofs), "basis")
                 label = "u"
             case "Cell problem":
                 pcell.solve(neg_ddf, f(xL), f(xR))
                 dofs = np.concatenate((pcell.solution, pcell.solution_faces))
-                f_HHO, _ = pcell.evaluate_fun(plot_xx, pcell.compute_reconstruction(dofs), pcell.degree_reconstruction)
+                f_HHO, _ = pcell.cell_reconstruction.evaluate_fun(plot_xx, pcell.compute_reconstruction(dofs), "basis")
                 label = "u"
         # Plot f
         ax.plot(plot_xx,f(plot_xx),'r.',label=label)
@@ -152,7 +152,7 @@ def test_HHO_convergence(computation, test_degrees=[0]):
                 # Compute requested HHO operation
                 match computation:
                     case "L2 projection":
-                        f_basis, f_gradient = c.evaluate_fun(quad_error_x, c.compute_L2_projection(f), c.degree)
+                        f_basis, f_gradient = c.evaluate_fun(quad_error_x, c.compute_L2_projection(f))
                     case "Reconstruction" | "Poisson solve":
                         match computation:
                             case "Reconstruction":
@@ -160,7 +160,7 @@ def test_HHO_convergence(computation, test_degrees=[0]):
                                 dofs = np.concatenate((c.compute_L2_projection(f), [f(c.x_left), f(c.x_right)]))
                             case "Poisson solve":
                                 dofs = np.concatenate((c.solution, c.solution_faces))
-                        f_basis, f_gradient = c.evaluate_fun(quad_error_x, c.compute_reconstruction(dofs), c.degree_reconstruction)
+                        f_basis, f_gradient = c.cell_reconstruction.evaluate_fun(quad_error_x, c.compute_reconstruction(dofs))
                 # Compute norm of error
                 error_L2_x = f_basis - f(quad_error_x)
                 error_H1_x = f_gradient - df(quad_error_x)
