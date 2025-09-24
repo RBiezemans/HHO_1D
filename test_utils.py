@@ -6,6 +6,13 @@ from HHO_kernel import HHO_kernel, HHO_cell
 def plot_basis(pcell: HHO_cell, plot_xx: np.ndarray):
     """
     Plot basis if pcell on the grid plot_xx.
+
+    Parameters
+    ----------
+        pcell: HHO_cell
+            Cell to perform the selected computation on.
+        plot_xx: ndarray
+            Grid used for plotting the results on the cell.
     """
     # Evaluate basis on the prototypical cell
     basis, gradient = pcell.evaluate_basis(plot_xx)
@@ -28,7 +35,18 @@ def plot_basis(pcell: HHO_cell, plot_xx: np.ndarray):
     fig.suptitle(f"{pcell.basis_type.capitalize()} basis")
 
 def test_HHO_computation(computation: str, pcell: HHO_cell, plot_xx: np.ndarray):
-    """Illustrate the result of several stages of computations in the local problem on pcell."""
+    """
+    Illustrate the result of several stages of computations in the local problem on pcell.
+    
+    Parameters
+    ----------
+        computation: str
+            "L2 projection" / "Reconstruction" / "Cell problem"
+        pcell: HHO_cell
+            Cell to perform the selected computation on.
+        plot_xx: ndarray
+            Grid used for plotting the results on the cell.
+    """
     xL = pcell.x_left
     xR = pcell.x_right
     # Define test functions for illustration
@@ -87,25 +105,37 @@ def test_HHO_computation(computation: str, pcell: HHO_cell, plot_xx: np.ndarray)
     
     fig.suptitle(f"Example of {computation}s")
 
-def test_HHO_convergence(computation, **kwargs):
+def test_HHO_convergence(computation, test_degrees=[0]):
     """
     Make convergence curves for different computations on the cell.
     
-    The cell degrees to plot are specified through the keyword argument "test_degree".
+    Parameters
+    ----------
+        computation: str
+            "L2 projection" / "Reconstruction" / "Poisson solve"
+        test_degree: list[int]
+            Cell degrees of the HHO method to compute convergence curves for.
     """
     x_left = 0
     x_right = 1
-    N_cells = 8*2**np.arange(0,6)
+    N_cells_min = 2
+    N_cells_per_degree = [np.array([2**(max((7-test_degree),N_cells_min)+k) for k in range(6)]) for test_degree in test_degrees]
     f = lambda x : np.cos(4*np.pi*x)
     df = lambda x : -4*np.pi*np.sin(4*np.pi*x)
     neg_ddf = lambda x : (4*np.pi)**2 * np.cos(4*np.pi*x)
-    test_degrees = kwargs["test_degrees"]
 
-    fig, axs = plt.subplots(2, len(test_degrees), 
-                            figsize=(12,8),
+    if len(test_degrees) == 1:
+        fig_rows = 1
+        fig_cols = 2
+    else:
+        fig_rows = 2
+        fig_cols = len(test_degrees) 
+    fig, axs = plt.subplots(fig_rows, fig_cols, 
+                            figsize=(min(12,3*fig_cols),4*fig_rows),
                             gridspec_kw={'hspace': 0.3})
     # Compute L2 and H1 errors for all test degrees
     for (ik, k_test) in enumerate(test_degrees):
+        N_cells = N_cells_per_degree[ik]
         errors_L2 = np.zeros(len(N_cells))
         errors_H1 = np.zeros(len(N_cells))
         for (i,N) in enumerate(N_cells):
@@ -140,7 +170,10 @@ def test_HHO_convergence(computation, **kwargs):
             errors_H1[i] = np.sqrt(error_H1_norm)
         # Plot L2 and H1 errors for given test degree
         for inorm, norm in enumerate(["L2", "H1"]):
-            ax = axs[inorm][ik]
+            if len(test_degrees)==1:
+                ax = axs[inorm]
+            else:
+                ax = axs[inorm][ik]
             match norm:
                 case "L2":
                     errors = errors_L2
