@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np 
 
-from HHO_kernel import HHO_kernel, HHO_cell
+from HHO_kernel import HHO_poisson, HHO_cell
 
 def plot_basis(pcell: HHO_cell, plot_xx: np.ndarray):
     """
@@ -142,7 +142,7 @@ def test_HHO_convergence(computation, test_degrees=[0], basis="monomial"):
         errors_H1 = np.zeros(len(N_cells))
         for (i,N) in enumerate(N_cells):
             grid_N = np.linspace(x_left, x_right, N+1)
-            solver = HHO_kernel(grid_N, k_test, basis)
+            solver = HHO_poisson(grid_N, k_test, basis)
             error_L2_norm = 0
             error_H1_norm = 0
             if computation == "Poisson solve":

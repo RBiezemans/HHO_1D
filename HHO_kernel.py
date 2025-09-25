@@ -1,15 +1,17 @@
+"""
+This module implements a 1D solver for the Poisson equation by the HHO method.
+"""
 import numpy as np
-import scipy.special as sp_fn # special functions, used for Legendre polynomials
+import scipy.special as sp_fn
 import scipy.sparse as sp
 from scipy.linalg import cho_factor, cho_solve
-from scipy.linalg import solve_triangular as solve_tr
 import warnings 
 
 from utils import resettable_lazy_property
 
-class HHO_kernel:
+class HHO_poisson:
     """
-    Object with the functionality to build the matrix and vector of the discrete linear system.
+    Solver for the Poisson equation discretized by the HHO method on an interval.
 
     Attributes
     ----------
@@ -24,9 +26,9 @@ class HHO_kernel:
         cell_degree : int
             Polynomial degree of the cell unknowns.
         basis_type : str
-                Description of the basis functions to be used (case-insensitively). Allowed values are:
-                - "monomial" corresponds to the monomial basis.
-                - "legendre" corresponds to the Legendre basis.
+            Description of the basis functions to be used (case-insensitively). Allowed values are:
+            - "monomial" corresponds to the monomial basis.
+            - "legendre" corresponds to the Legendre basis.
         cells : list of HHO_cell
             Discretization and solution of all the cell problems.
         boundary_conditions : str
@@ -49,7 +51,9 @@ class HHO_kernel:
 
     def __init__(self, x, degree=0, basis="Monomial"):
         """
-        Initialize HHO kernel: define parameters of the grid and the cell degree.
+        Initialize HHO kernel.
+        
+        Define parameters of the grid, the cell degree and the basis used for the polynomial space on the cell.
 
         Args:
             x : ndarray
@@ -57,7 +61,7 @@ class HHO_kernel:
             degree : int, default = 0
                 polynomial degree of the cell unknowns
             basis : str, optional
-                Description of the basis functions to be used (case-insensitively). Allowed values are:
+                Description of the basis functions to be used (case-insensitively). Allowed values are
                 - "monomial" corresponds to the monomial basis.
                 - "legendre" corresponds to the Legendre basis.
                 Defaults to "Monomial"
