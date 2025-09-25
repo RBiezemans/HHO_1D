@@ -193,27 +193,8 @@ class HHO_kernel:
             transmission_rhs[0:-1] = f_half_average 
             transmission_rhs[1:] = transmission_rhs[1:] + f_half_average
         else:
-            # We do NOT reconstruct the global problem from the local problems as follows
-            # for i in range(self.nb_cells):
-            #     cell = self.cells[i]
-            #     rhs = cell.compute_integral_against_basis(f)
-            #     rhs = cho_solve((cell.local_cho, cell._local_cho_lower), rhs, overwrite_b=False)
-            #     rhs = cell.HHO_dofs_to_reconstruction[-cell.number_faces:,:cell.degree+1] @ rhs
-            #     i_faces = [i, i+1]
-            #     transmission_rhs[i_faces] -= rhs
-            #
-            # We should directly integrate f in the 1D case
             for (i,cell) in enumerate(self.cells):
-                quad_degree = int(np.ceil((self.cell_degree)/2)) + 1
-                quad_points, quad_weights = cell.quadrature(quad_degree)
-                for k in range(cell.number_faces):
-                    if k == 0:
-                        test = lambda x: 1 - (x - cell.x_left)/cell.h 
-                    elif k==1:
-                        test = lambda x: 1 + (x - cell.x_right)/cell.h 
-                    else:
-                        raise RuntimeError("Only 2 faces are supported for 1D HHO.")
-                    transmission_rhs[i+k] += np.dot(quad_weights, test(quad_points)*f(quad_points))
+                    transmission_rhs[i:i+2] += cell.compute_transmission_rhs(f)
         return transmission_rhs
     
     @property 
@@ -473,9 +454,10 @@ class HHO_cell:
             # polynomial degree of the space for the reconstruction of the potential
         self.number_faces = 2
 
-        if basis.lower() not in ["monomial", "legendre"]:
+        basis = basis.lower()
+        if basis not in ["monomial", "legendre"]:
             raise ValueError(f"Unsupported basis type for the cell space ({basis}).")
-        self.basis_type = basis.lower()
+        self.basis_type = basis
         if stabilization not in [0,1]:
             raise ValueError(f"Unsupported choice for stabilization ({basis} instead of 0 or 1).")
         self.stabilization_type = stabilization
@@ -1028,3 +1010,46 @@ class HHO_cell:
         local_matrix = self.local_matrix[:-self.number_faces,:-self.number_faces]
         local_cho, self._local_cho_lower = cho_factor(local_matrix, overwrite_a=True)
         return local_cho
+    
+    def compute_transmission_rhs(self, f):
+        """
+        Compute the contribution to the right-hand side of the transmission problem on the cell.
+
+        This corresponds (in 1D) to the integral of f against the affine basis functions associated faces of the cell.
+
+        Parameters
+        ----------
+            f : callable
+                Source term of the transmission problem.
+        
+        Returns
+        -------
+            ndarray
+                Contribution to the right-hand side on the left and right face.
+        """
+        #
+        # The following would correspond to the general computation in higher dimensions.
+        # But we're using the conforming P1 formulation of the transmission problem in 1D,
+        # so we need to compute the source term accordingly.
+        #
+        # for i in range(self.nb_cells):
+        #     cell = self.cells[i]
+        #     rhs = cell.compute_integral_against_basis(f)
+        #     rhs = cho_solve((cell.local_cho, cell._local_cho_lower), rhs, overwrite_b=False)
+        #     rhs = cell.HHO_dofs_to_reconstruction[-cell.number_faces:,:cell.degree+1] @ rhs
+        #     i_faces = [i, i+1]
+        #     transmission_rhs[i_faces] -= rhs
+        #
+        # Approach according to the P1 formulation
+        # Determine the quadrature rule
+        quad_degree = int(np.ceil((self.degree)/2)) + 1
+        quad_points, quad_weights = self.quadrature(quad_degree)
+        test_function = np.zeros((len(quad_points), self.number_faces))
+        # Evaluate test function associated to the left face
+        test_function[:,0] = 1 - (quad_points - self.x_left)/self.h 
+        # Evaluate test function associated to the right face
+        test_function[:,1] = 1 + (quad_points - self.x_right)/self.h 
+        # Evaluate the source term
+        f_value = f(quad_points)[:,None]
+        # Compute integrals against f
+        return np.dot(quad_weights, test_function*f_value)
