@@ -140,6 +140,7 @@ def test_HHO_convergence(computation, test_degrees=[0], basis="monomial"):
         N_cells = N_cells_per_degree[ik]
         errors_L2 = np.zeros(len(N_cells))
         errors_H1 = np.zeros(len(N_cells))
+        # Solve Poisson equation for each grid
         for (i,N) in enumerate(N_cells):
             grid_N = np.linspace(x_left, x_right, N+1)
             solver = HHO_poisson(grid_N, k_test, basis)

@@ -318,7 +318,7 @@ class HHO_poisson:
             ax : matplotlib.axes.Axes
                 Axis to draw the plot on.
             *args
-                Additional arguments to specify which elements to plot. Should be one of:
+                Additional arguments to specify which elements to plot. Should be any of
                 * "faces", to plot the solution at the faces;
                 * "cells", to plot the solution at the cells;
                 * "reconstruction", to plot the reconstruction of the potential that
