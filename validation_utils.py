@@ -105,18 +105,20 @@ def test_HHO_computation(computation: str, pcell: HHO_cell, plot_xx: np.ndarray)
     
     fig.suptitle(f"Example of {computation}s")
 
-def test_HHO_convergence(computation, test_degrees=[0], basis="monomial"):
+def test_HHO_convergence(computation, test_degrees=[0], basis="monomial", orthogonalize=False):
     """
     Make convergence curves for different computations on the cell.
     
     Parameters
     ----------
-        computation: str
+        computation : str
             "L2 projection" / "Reconstruction" / "Poisson solve"
-        test_degree: list[int]
+        test_degree : list[int]
             Cell degrees of the HHO method to compute convergence curves for.
-        basis: str
+        basis : str
             Description of the basis used on the cell.
+        orthogonalize : bool
+            True if the basis is to be orthogonalized by Modified Gram-Schmidt, False if not.
     """
     x_left = 0
     x_right = 1
@@ -143,7 +145,7 @@ def test_HHO_convergence(computation, test_degrees=[0], basis="monomial"):
         # Solve Poisson equation for each grid
         for (i,N) in enumerate(N_cells):
             grid_N = np.linspace(x_left, x_right, N+1)
-            solver = HHO_poisson(grid_N, k_test, basis)
+            solver = HHO_poisson(grid_N, k_test, basis, orthogonalize)
             error_L2_norm = 0
             error_H1_norm = 0
             if computation == "Poisson solve":

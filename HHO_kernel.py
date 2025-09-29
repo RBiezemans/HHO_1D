@@ -29,6 +29,8 @@ class HHO_poisson:
             Description of the basis functions to be used (case-insensitively). Allowed values are:
             - "monomial" corresponds to the monomial basis.
             - "legendre" corresponds to the Legendre basis.
+        orthonormalize : bool
+            Orthonormalize all polynomial bases when True, use the bases as-is when False.
         cells : list of HHO_cell
             Discretization and solution of all the cell problems.
         boundary_conditions : str
@@ -49,7 +51,7 @@ class HHO_poisson:
             Solution vector of the transmission problem.
     """
 
-    def __init__(self, x, degree=0, basis="Monomial"):
+    def __init__(self, x, degree=0, basis="Monomial", orthonormal_basis=True):
         """
         Initialize HHO kernel.
         
@@ -65,6 +67,9 @@ class HHO_poisson:
                 - "monomial" corresponds to the monomial basis.
                 - "legendre" corresponds to the Legendre basis.
                 Defaults to "Monomial"
+            orthonormal_basis : bool, optional
+                Orthonormalize all polynomial bases when True, use the bases as-is when False.
+                Defaults to True.
         """
         self.points = x
         self.spacing = x[1:] - x[0:-1]
@@ -73,12 +78,14 @@ class HHO_poisson:
         self.nb_cells = self.nb_face_unknowns-1
         self.cell_degree = degree
         self.basis_type = basis
+        self.orthonormalize = orthonormal_basis
 
         # Initialize cells problems
         self.cells = [HHO_cell(self.points[i], 
                                self.points[i+1], 
-                               self.cell_degree, 
-                               self.basis_type) 
+                               degree=self.cell_degree, 
+                               basis=self.basis_type,
+                               orthonormal_basis=self.orthonormalize) 
                       for i in range(self.nb_face_unknowns-1)]
 
         # Initialize quantities related to the linear system to unset state
@@ -382,6 +389,8 @@ class HHO_cell:
             Description of the basis functions to be used. Allowed values are:
             - "monomial" corresponds to the monomial basis.
             - "legendre" corresponds to the Legendre basis.
+        orthonormalize : bool 
+            Orthonormalize all polynomial bases when True, use the bases as-is when False.
         stabilization_type : int
             Selection of way of stabilization. Allowed values are:
             - 0, to penalize only the difference between cell unknowns and face unknowns at the boundary.
@@ -394,6 +403,8 @@ class HHO_cell:
             Reconstruction of the solution to the local problem on the cell in the polynomial basis.
         mass_matrix : ndarray
             Mass matrix of the polynomial basis of degree self.degree on the cell.
+        ortho_matrix : ndarray
+            Matrix to pass from the computed basis to the orthonormalized one.
         mass_cho : scipy.lingal.cho_factor
             Cholesky factorization of mass_matrix.
         degree_reconstruction : int
@@ -418,7 +429,7 @@ class HHO_cell:
             Cholesky decomposition of local_matrix without the face unknowns.
     """
 
-    def __init__(self, x_left, x_right, degree, basis="Monomial", stabilization=1):
+    def __init__(self, x_left, x_right, degree, basis="Monomial", orthonormal_basis=True, stabilization=1):
         """
         Define parameters for local cell problem.
 
@@ -435,6 +446,9 @@ class HHO_cell:
                 - "monomial" corresponds to the monomial basis.
                 - "legendre" corresponds to the Legendre basis.
                 Defaults to "Monomial"
+            orthonormal_basis : bool, optional
+                Orthonormalize all polynomial bases when True, use the bases as-is when False.
+                Defaults to True.
             stabilization : int, optional
                 Option to select the desired type of stabilization. Allowed values are:
                 - 0, to penalize only the difference between cell unknowns and face unknowns at the boundary.
@@ -462,6 +476,7 @@ class HHO_cell:
         if basis not in ["monomial", "legendre"]:
             raise ValueError(f"Unsupported basis type for the cell space ({basis}).")
         self.basis_type = basis
+        self.orthonormalize = orthonormal_basis
         if stabilization not in [0,1]:
             raise ValueError(f"Unsupported choice for stabilization ({basis} instead of 0 or 1).")
         self.stabilization_type = stabilization
@@ -473,6 +488,7 @@ class HHO_cell:
         # Matrices for the discrete cell problem
         self._quad_degree_mass = self.degree+1
         self._mass_matrix = None
+        self._ortho_matrix = None
         self._mass_cho = None
         self._mass_cho_lower = None 
             # self._mass_cho_lower is a flag indicating whether the factor is in the lower or upper triangle 
@@ -586,7 +602,33 @@ class HHO_cell:
         x = (x - x_left_reference) / h_reference * self.h + self.x_left
         w = w * self.h/h_reference
         return x, w
-
+    
+    @resettable_lazy_property
+    def ortho_matrix(self):
+        """
+        Matrix to pass from computed basis to the orthonormalized one.
+        
+        Each column represents one of the orthonormalized basis functions in the basis of the old one.
+        The matrix is computed by modified Gram-Schmidt, hence it is upper triangular.
+        """
+        # Create non-orthogonalized cell to compute mass matrix
+        non_orthogonal = HHO_cell(self.x_left, 
+                                  self.x_right, 
+                                  degree=self.degree, 
+                                  basis=self.basis_type, 
+                                  orthonormal_basis=False, 
+                                  stabilization=self.stabilization_type)
+        mass = non_orthogonal.mass_matrix
+        ndofs = self.degree+1
+        # Initialize orthogonalization matrix by the identity
+        ortho_matrix = np.eye(ndofs)
+        # Apply modified Gram-Schmidt
+        for j in range(ndofs):
+            q = ortho_matrix[:,j]
+            q = q / np.sqrt(q.T @ mass @ q)
+            ortho_matrix[:,j] = q
+            ortho_matrix[:,(j+1):] -= q[:,None] @ (q.T @ mass @ ortho_matrix[:,(j+1):])[None,:]
+        return ortho_matrix
 
     def evaluate_basis(self, points, *args):
         """
@@ -658,6 +700,11 @@ class HHO_cell:
                         for i in range(nb_basis_functions):
                             gradient = sp_fn.legendre(i).deriv()
                             gradient_value[:,i] = gradient(points_scaled)*h_reference/self.h
+        if self.orthonormalize:
+            if compute_basis:
+                basis_value = basis_value @ self.ortho_matrix
+            if compute_gradient:
+                gradient_value = gradient_value @ self.ortho_matrix
         return basis_value, gradient_value
     
     def evaluate_fun(self, points, f, *args):
@@ -729,23 +776,37 @@ class HHO_cell:
     
     @resettable_lazy_property 
     def mass_matrix(self):
-        # Evaluate basis functions at the quadrature points
-        quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
-        basis, _ = self.evaluate_basis(quad_points, "basis")
-        # Prepare basis-basis multiplication at each quadrature point
-        basis_column = basis[:,:,None]
-        basis_row = basis[:,None,:]
-        # Compute basis-basis multiplication
-        mass_matrix = np.einsum('ijk,ikl->ijl', basis_column, basis_row)
+        if self.orthonormalize:
+            mass = np.eye(self.degree+1)
+        else:
+            # Evaluate basis functions at the quadrature points
+            quad_points, quad_weights = self.quadrature(self._quad_degree_mass)
+            basis, _ = self.evaluate_basis(quad_points, "basis")
+            # Prepare basis-basis multiplication at each quadrature point
+            basis_column = basis[:,:,None]
+            basis_row = basis[:,None,:]
+            # Compute basis-basis multiplication
+            mass_matrix = np.einsum('ijk,ikl->ijl', basis_column, basis_row)
+            # Integrate mass matrix
+            mass = np.einsum('i,ikl->kl', quad_weights, mass_matrix)
         # Reset the Cholesky decomposition of the mass matrix before returning
         self._mass_cho = None
         self._mass_cho_lower = None
-        # Integrate mass matrix
-        return np.einsum('i,ikl->kl', quad_weights, mass_matrix)
+        return mass
 
     @resettable_lazy_property
     def mass_cho(self):
-        """Cholesky factorization of the mass matrix of the polynomial basis of degree self.degree on the cell."""
+        """
+        Cholesky factorization of the mass matrix of the polynomial basis of degree self.degree on the cell.
+        
+        Warns
+        -----
+            UserWarning
+                If the Cholesky decomposition is asked for on an orthonormal basis.
+                The mass matrix is the identiy matrix in that case.
+        """
+        if self.orthonormalize:
+            warnings.warn("Cholesky factorization is applied to mass matrix in orthonormalized basis.")
         mass_cho, self._mass_cho_lower = cho_factor(self.mass_matrix, overwrite_a=True)
         return mass_cho
 
@@ -783,7 +844,11 @@ class HHO_cell:
             ndarray
                 L2-orthogonal projection of f in the form of its coefficients in the basis.
         """
-        return cho_solve((self.mass_cho, self._mass_cho_lower), rhs)
+        if self.orthonormalize:
+            proj = rhs
+        else:
+            proj = cho_solve((self.mass_cho, self._mass_cho_lower), rhs)
+        return proj
 
     def compute_integral_against_basis(self, f):
         """
@@ -903,12 +968,17 @@ class HHO_cell:
 
     @property 
     def cell_reconstruction(self):
-        """HHO cell on the same domain but with the degree of the reconstruction space. """
+        """HHO cell on the same domain but with the degree of the reconstruction space."""
         if self._cell_reconstruction is None:
             if self.degree == self.degree_reconstruction:
                 self._cell_reconstruction = self
             else:
-                self._cell_reconstruction = HHO_cell(self.x_left, self.x_right, self.degree_reconstruction, self.basis_type)
+                self._cell_reconstruction = HHO_cell(self.x_left, 
+                                                     self.x_right, 
+                                                     self.degree_reconstruction, 
+                                                     basis=self.basis_type,
+                                                     orthonormal_basis=self.orthonormalize,
+                                                     stabilization=self.stabilization_type)
         return self._cell_reconstruction
 
     def compute_reconstruction(self, dofs):
@@ -928,7 +998,8 @@ class HHO_cell:
         if self.degree == 0:
             # We use the explicit solution of the reconstruction problem available in this case
             gradient = (dofs[-1]-dofs[-2])/self.h
-            r = lambda x: dofs[0] + gradient*(x-self.barycenter)
+            basis, _ = self.evaluate_basis(self.x_left, "basis")
+            r = lambda x: dofs[0]*basis[0,0] + gradient*(x-self.barycenter)
             # We need to manually project the reconstruction on the reconstruction space
             return self.cell_reconstruction.compute_L2_projection(r)
         else:

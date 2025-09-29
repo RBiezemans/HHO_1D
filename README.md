@@ -3,7 +3,7 @@
 
 ## Features of the project
 The solver implements:
-* Arbitrary polynomial degree for the cell unknowns (but for high-order approximations make sure to use the Legendre polynomials as the basis functions on the cell).
+* Arbitrary polynomial degree for the cell unknowns (be sure to activate orthonormalization for higher-order approximations when using a monomial basis).
 * Arbitrary Dirichlet conditions.
 * Homogeneous Neumann conditions.
 
