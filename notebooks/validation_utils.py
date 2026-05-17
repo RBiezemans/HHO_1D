@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
-import numpy as np 
+import numpy as np
+from hho_1d import HHO_cell, HHO_poisson
 
-from HHO_kernel import HHO_poisson, HHO_cell
 
 def plot_basis(pcell: HHO_cell, plot_xx: np.ndarray):
     """

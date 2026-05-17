@@ -1,13 +1,15 @@
 """
 This module implements a 1D solver for the Poisson equation by the HHO method.
 """
-import numpy as np
-import scipy.special as sp_fn
-import scipy.sparse as sp
-from scipy.linalg import cho_factor, cho_solve
-import warnings 
+import warnings
 
-from utils import resettable_lazy_property
+import numpy as np
+import scipy.sparse as sp
+import scipy.special as sp_fn
+from scipy.linalg import cho_factor, cho_solve
+
+from hho_1d.utils import resettable_lazy_property
+
 
 class HHO_poisson:
     """
