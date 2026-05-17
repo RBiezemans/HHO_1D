@@ -8,6 +8,6 @@ The solver implements:
 * Homogeneous Neumann conditions.
 
 ## Getting started
-You may start by having a look at the [getting_started](getting_started.ipynb) Jupyter notebook, which explains the interface to the solver.
+You may start by having a look at the [getting_started](notebooks/getting_started.ipynb) Jupyter notebook, which explains the interface to the solver.
 
-More examples and validation of the solver are included in the Jupter notebooks [validation_lowest_order](validation_lowest_order.ipynb) and [validation_higher_order](validation_higher_order.ipynb).
+More examples and validation of the solver are included in the Jupter notebooks [validation_lowest_order](notebooks/validation_lowest_order.ipynb) and [validation_higher_order](notebooks/validation_higher_order.ipynb).
