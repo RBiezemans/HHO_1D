@@ -52,7 +52,6 @@ class HHO_poisson:
         solution_face : ndarray
             Solution vector of the transmission problem.
     """
-
     def __init__(self, x, degree=0, basis="Monomial", orthonormal_basis=True):
         """
         Initialize HHO kernel.
@@ -109,11 +108,13 @@ class HHO_poisson:
         """
         return self._boundary_conditions
     
+
     @boundary_conditions.setter 
     def boundary_conditions(self, bc):
         if self.boundary_conditions != bc:
             self._boundary_conditions = bc
             self._transmission_system = None
+
 
     @resettable_lazy_property 
     def transmission_system(self):
@@ -149,6 +150,7 @@ class HHO_poisson:
                 raise ValueError(f"Unsupported boundary conditions [{self.boundary_conditions}] for global transmission problem.")
         return sp.linalg.splu(A)
 
+
     @resettable_lazy_property
     def transmission_matrix(self):
         """Matrix of the discrete linear system of the global transmission problem with Neumann conditions."""
@@ -160,6 +162,7 @@ class HHO_poisson:
         diag[1:] += 1/self.spacing
         # Save the linear system as a sparse matrix
         return sp.diags_array([upper_diag, diag, lower_diag], offsets=[+1, 0, -1])
+
 
     @resettable_lazy_property 
     def transmission_average(self):
@@ -176,6 +179,7 @@ class HHO_poisson:
         # Save in sparse format for compatibilty with sp.block_array
         return sp.coo_array(average)
 
+
     @property 
     def source(self):
         """
@@ -186,10 +190,12 @@ class HHO_poisson:
         assert self._source is not None, "Right-hand side is required but has not yet been set."
         return self._source
     
+
     @source.setter
     def source(self, f):
         self._source = f
         self._transmission_rhs = None 
+
 
     @resettable_lazy_property
     def transmission_rhs(self):
@@ -210,6 +216,7 @@ class HHO_poisson:
                     transmission_rhs[i:i+2] += cell.compute_transmission_rhs(f)
         return transmission_rhs
     
+
     @property 
     def solution_face(self):
         """
@@ -219,6 +226,7 @@ class HHO_poisson:
         """
         assert self._solution_face is not None, "Solution to the transmission problem has not yet been computed."
         return self._solution_face
+
 
     def solve_transmission(self, f, bc_left = None, bc_right = None, average = None):
         """
@@ -284,6 +292,7 @@ class HHO_poisson:
         # Save solution to instance
         self._solution_face = sol[0:self.nb_face_unknowns]
     
+
     def solve_cell_problems(self):
         """
         Solve the local cell problems.
@@ -292,6 +301,7 @@ class HHO_poisson:
         """
         for i, cell in enumerate(self.cells):
             cell.solve(self.source, self.solution_face[i], self.solution_face[i+1])
+
 
     def solve(self, f, bc_left = None, bc_right = None, average = None):
         """
@@ -430,7 +440,6 @@ class HHO_cell:
         local_cho(self):
             Cholesky decomposition of local_matrix without the face unknowns.
     """
-
     def __init__(self, x_left, x_right, degree, basis="Monomial", orthonormal_basis=True, stabilization=1):
         """
         Define parameters for local cell problem.
@@ -509,6 +518,7 @@ class HHO_cell:
         self._local_cho = None 
         self._local_cho_lower = None # similar use as self._mass_cho_lower
 
+
     @property 
     def solution(self):
         """
@@ -519,6 +529,7 @@ class HHO_cell:
         assert self._solution is not None, "Solution to local problem has not yet been computed."
         return self._solution
     
+   
     @property 
     def solution_faces(self):
         """
@@ -530,6 +541,7 @@ class HHO_cell:
         assert self._solution_faces is not None, "Solution at the cell faces is unknown."
         return self._solution_faces
 
+
     @property 
     def solution_reconstruction(self):
         """
@@ -539,6 +551,7 @@ class HHO_cell:
         """
         assert self._solution_reconstruction is not None, "Solution to local problem has not yet been computed."
         return self._solution_reconstruction
+
 
     def solve(self, source, sol_global_left, sol_global_right):
         """
@@ -579,7 +592,8 @@ class HHO_cell:
         self._solution = solution
         self._solution_faces = solution_faces
         self._solution_reconstruction = self.compute_reconstruction(np.concatenate([self.solution, self.solution_faces]))
-        
+
+
     def quadrature(self, deg):
         """
         Compute the sample points and weights for Gauss-Legendre quadrature on the cell.
@@ -605,6 +619,7 @@ class HHO_cell:
         w = w * self.h/h_reference
         return x, w
     
+
     @resettable_lazy_property
     def ortho_matrix(self):
         """
@@ -631,6 +646,7 @@ class HHO_cell:
             ortho_matrix[:,j] = q
             ortho_matrix[:,(j+1):] -= q[:,None] @ (q.T @ mass @ ortho_matrix[:,(j+1):])[None,:]
         return ortho_matrix
+
 
     def evaluate_basis(self, points, *args):
         """
@@ -709,6 +725,7 @@ class HHO_cell:
                 gradient_value = gradient_value @ self.ortho_matrix
         return basis_value, gradient_value
     
+
     def evaluate_fun(self, points, f, *args):
         """
         Evaluate a function given by its coefficients in the basis at prescribed points and its gradient.
@@ -736,6 +753,7 @@ class HHO_cell:
             gradient = gradient @ f
         return basis, gradient
 
+
     def evaluate_solution(self, points, *args):
         """
         Evaluate the cell unknowns of the HHO solution and the corresponding gradient.
@@ -755,6 +773,7 @@ class HHO_cell:
             Values of the gradient of the solution at the given pointsif "gradient" is passed in *args, otherwise None.
         """
         return self.evaluate_fun(points, self.solution, *args)
+
 
     def evaluate_reconstruction(self, points, *args):
         """
@@ -776,6 +795,7 @@ class HHO_cell:
         """
         return self.cell_reconstruction.evaluate_fun(points, self.solution_reconstruction, *args)
     
+
     @resettable_lazy_property 
     def mass_matrix(self):
         if self.orthonormalize:
@@ -796,6 +816,7 @@ class HHO_cell:
         self._mass_cho_lower = None
         return mass
 
+
     @resettable_lazy_property
     def mass_cho(self):
         """
@@ -811,6 +832,7 @@ class HHO_cell:
             warnings.warn("Cholesky factorization is applied to mass matrix in orthonormalized basis.")
         mass_cho, self._mass_cho_lower = cho_factor(self.mass_matrix, overwrite_a=True)
         return mass_cho
+
 
     def compute_L2_projection(self, f):
         """
@@ -832,6 +854,7 @@ class HHO_cell:
         # Solve projection problem
         return self.compute_L2_projection_from_rhs(rhs)
 
+
     def compute_L2_projection_from_rhs(self, rhs):
         """
         Compute the L2-orthogonal projection on the cell given the right-hand side vector of the system.
@@ -851,6 +874,7 @@ class HHO_cell:
         else:
             proj = cho_solve((self.mass_cho, self._mass_cho_lower), rhs)
         return proj
+
 
     def compute_integral_against_basis(self, f):
         """
@@ -876,6 +900,7 @@ class HHO_cell:
         # Compute integrals
         return np.einsum('i,ik->k', quad_weights, fbasis)
 
+
     @resettable_lazy_property
     def stiffness_matrix(self):
         """Stiffness matrix on the basis of the cell."""
@@ -894,16 +919,19 @@ class HHO_cell:
         # Integrate stiffness matrix
         return np.einsum('i,ikl->kl', quad_weights, stiffness)
 
+
     @resettable_lazy_property 
     def stiffness_matrix_reduced(self):
         """Stiffness matrix with the constant function removed from the basis."""
         return self.stiffness_matrix[1:,1:]
+
 
     @resettable_lazy_property 
     def stiffness_reduced_cho(self):
         """Cholesky factorization of self.stiffness_matrix_reduced."""
         stiffness_reduced_cho, self._stiffness_reduced_cho_lower = cho_factor(self.stiffness_matrix_reduced)
         return stiffness_reduced_cho
+
 
     @property 
     def HHO_dofs_to_reconstruction(self):
@@ -960,6 +988,7 @@ class HHO_cell:
         ### Done
         return HHO_to_rec
     
+
     @property 
     def reconstruction_matrix(self):
         """Matrix to compute the reconstruction from the HHO cell and face unknowns."""
@@ -967,6 +996,7 @@ class HHO_cell:
             self._reconstruction_matrix = cho_solve((self.cell_reconstruction.stiffness_reduced_cho, self.cell_reconstruction._stiffness_reduced_cho_lower), 
                                                      self.HHO_dofs_to_reconstruction)
         return self._reconstruction_matrix        
+
 
     @property 
     def cell_reconstruction(self):
@@ -982,6 +1012,7 @@ class HHO_cell:
                                                      orthonormal_basis=self.orthonormalize,
                                                      stabilization=self.stabilization_type)
         return self._cell_reconstruction
+
 
     def compute_reconstruction(self, dofs):
         """
@@ -1019,6 +1050,7 @@ class HHO_cell:
             c0 = np.array((integral_dof - integral_r)/integral0, ndmin=1)
             return np.concatenate([c0, reconstruction])
     
+
     @resettable_lazy_property 
     def stabilization_matrix(self):
         """Matrix of the stabilization operator."""
@@ -1064,6 +1096,7 @@ class HHO_cell:
             stabilization -= S_proj_rec
         return stabilization
 
+
     @resettable_lazy_property 
     def local_matrix(self):
         """Matrix of discrete system for the local cell problem including the face unknowns."""
@@ -1080,6 +1113,7 @@ class HHO_cell:
         # Return the local matrix
         return local_matrix
 
+
     @property 
     def local_cho(self):
         """Cholesky decomposition of local_matrix."""
@@ -1088,6 +1122,7 @@ class HHO_cell:
         local_cho, self._local_cho_lower = cho_factor(local_matrix, overwrite_a=True)
         return local_cho
     
+
     def compute_transmission_rhs(self, f):
         """
         Compute the contribution to the right-hand side of the transmission problem on the cell.

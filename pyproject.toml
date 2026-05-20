@@ -17,6 +17,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "ipykernel>=7.2.0",
+    "pytest>=9.0.3",
 ]
 
 [tool.hatch.build.targets.wheel]
